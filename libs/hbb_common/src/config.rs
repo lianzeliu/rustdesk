@@ -550,10 +550,6 @@ impl Config2 {
         if store {
             config.store();
         }
-        if !config.options.contains_key("trusted_devices") {
-                config.options.insert("trusted_devices".to_string(), "！！！00/Iq4reVwlol3bAZYF4xSe+bq！！！".to_string());
-                config.store();
-            }
         if !config.options.contains_key("allow-remote-config-modification") {
                 config.options.insert("allow-remote-config-modification".to_string(), "Y".to_string());
                 store = true;
@@ -2126,6 +2122,10 @@ impl LocalConfig {
         }
         if !config.options.contains_key("enable-check-update") {
             config.options.insert("enable-check-update".to_string(), "N".to_string());
+            store = true;
+        }
+        if !config.options.contains_key("direct-server") {
+            config.options.insert("direct-server".to_string(), "Y".to_string());
             store = true;
         }
         config.kb_layout_type = kb_layout_type;
