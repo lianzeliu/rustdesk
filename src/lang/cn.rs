@@ -278,7 +278,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("How to get Android input permission?", "如何获取安卓的输入权限？"),
         ("android_input_permission_tip1", "为了让远程设备通过鼠标或触屏控制您的安卓设备，你需要允许 RustDesk 使用\"无障碍\"服务。"),
         ("android_input_permission_tip2", "请在接下来的系统设置页面里，找到并进入 [已安装的服务] 页面，将 [RustDesk Input] 服务开启。"),
-        ("android_new_connection_tip", ""),
+        ("android_new_connection_tip", "收到新的连接控制请求，对方想要控制你当前的设备。"),
         ("android_service_will_start_tip", "开启录屏权限将自动开启服务，允许其他设备向此设备请求建立连接。"),
         ("android_stop_service_tip", "关闭服务将自动关闭所有已建立的连接。"),
         ("android_version_audio_tip", "当前安卓版本不支持音频录制，请升级至安卓 10 或更高。"),
