@@ -2798,6 +2798,16 @@ pub fn is_disable_installation() -> bool {
     is_some_hard_opton("disable-installation")
 }
 
+#[inline]
+pub fn enable_check_update() -> bool {
+    Config::get_bool_option(keys::OPTION_ENABLE_CHECK_UPDATE)
+}
+
+#[inline]
+pub fn enable_udp_punch() -> bool {
+    Config::get_bool_option(keys::OPTION_ENABLE_UDP_PUNCH)
+}
+
 // This function must be kept the same as the one in flutter and sciter code.
 // flutter: flutter/lib/common.dart -> option2bool()
 // sciter: Does not have the function, but it should be kept the same.
