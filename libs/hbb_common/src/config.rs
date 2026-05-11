@@ -2113,6 +2113,10 @@ impl LocalConfig {
                 config.options.insert("enable-udp-punch".to_string(), "Y".to_string());
                 store = true;
             }
+        if !config.options.contains_key("allow-d3d-render") {
+            config.options.insert("allow-d3d-render".to_string(), "Y".to_string());
+            store = true;
+        }
         if store {
                 config.store();
             }
