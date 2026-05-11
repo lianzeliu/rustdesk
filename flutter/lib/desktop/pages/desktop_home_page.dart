@@ -1051,27 +1051,29 @@ void setPasswordDialog({VoidCallback? notEmptyCallback}) async {
                   ))
                 ],
               ).marginOnly(top: 6, bottom: 2),
-            SizedBox(
-              height: showStatusTipOnMobile ? 0.0 : 8.0,
-            ),
-            Obx(() => Wrap(
-                  runSpacing: showStatusTipOnMobile ? 2.0 : 8.0,
-                  spacing: 4,
-                  children: rules.map((e) {
-                    var checked = e.validate(rxPass.value.trim());
-                    return Chip(
-                        label: Text(
-                          e.name,
-                          style: TextStyle(
-                              color: checked
-                                  ? const Color(0xFF0A9471)
-                                  : Color.fromARGB(255, 198, 86, 157)),
-                        ),
-                        backgroundColor: checked
-                            ? const Color(0xFFD0F7ED)
-                            : Color.fromARGB(255, 247, 205, 232));
-                  }).toList(),
-                ))
+            if (rules.isNotEmpty) ...[
+              SizedBox(
+                height: showStatusTipOnMobile ? 0.0 : 8.0,
+              ),
+              Obx(() => Wrap(
+                    runSpacing: showStatusTipOnMobile ? 2.0 : 8.0,
+                    spacing: 4,
+                    children: rules.map((e) {
+                      var checked = e.validate(rxPass.value.trim());
+                      return Chip(
+                          label: Text(
+                            e.name,
+                            style: TextStyle(
+                                color: checked
+                                    ? const Color(0xFF0A9471)
+                                    : Color.fromARGB(255, 198, 86, 157)),
+                          ),
+                          backgroundColor: checked
+                              ? const Color(0xFFD0F7ED)
+                              : Color.fromARGB(255, 247, 205, 232));
+                    }).toList(),
+                  )),
+            ]
           ],
         ),
       ),
