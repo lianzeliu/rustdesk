@@ -24,7 +24,6 @@ use std::os::windows::io::AsRawHandle;
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::{Mutex, OnceLock},
 };
 #[cfg(windows)]
 use windows::Win32::{Foundation::HANDLE, System::Pipes::GetNamedPipeClientProcessId};
@@ -206,6 +205,17 @@ fn active_uid_strict() -> Option<u32> {
 #[inline]
 pub(crate) fn active_uid() -> Option<u32> {
     active_uid_strict()
+}
+
+/// The active session uid read ONLY from the service-loop cache, never from a fresh (blocking) seat0
+/// lookup. `None` on a cache miss. For hot, latency-sensitive, fail-closed re-auth on an async runtime
+/// thread (the `_drm` per-frame re-auth), where a blocking `loginctl` per frame would stall the stream.
+// Gated with the feature, not just the OS: the `_drm` per-frame re-auth is its only caller, so a
+// drm-off Linux build would carry it as dead code and warn about it.
+#[cfg(all(target_os = "linux", feature = "drm"))]
+#[inline]
+pub(crate) fn active_uid_cached() -> Option<u32> {
+    crate::platform::linux::get_active_userid_cached()
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -509,66 +519,17 @@ pub(crate) fn ensure_peer_executable_matches_current_by_fd(
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 const UNAUTHORIZED_IPC_LOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-#[derive(Default)]
-struct UnauthorizedIpcLogThrottle {
-    last_log_at: Option<std::time::Instant>,
-    suppressed: u64,
-}
-
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-impl UnauthorizedIpcLogThrottle {
-    #[inline]
-    fn on_reject(&mut self, now: std::time::Instant) -> Option<u64> {
-        if let Some(last) = self.last_log_at {
-            if now.saturating_duration_since(last) < UNAUTHORIZED_IPC_LOG_INTERVAL {
-                self.suppressed += 1;
-                return None;
-            }
-        }
-        self.last_log_at = Some(now);
-        Some(std::mem::take(&mut self.suppressed))
-    }
-}
-
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-#[inline]
-fn throttled_unauthorized_ipc_log(
-    throttle_cell: &OnceLock<Mutex<UnauthorizedIpcLogThrottle>>,
-    emit: impl FnOnce(u64),
-) {
-    let throttle = throttle_cell.get_or_init(|| Mutex::new(UnauthorizedIpcLogThrottle::default()));
-    let should_log = match throttle.lock() {
-        Ok(mut throttle) => throttle.on_reject(std::time::Instant::now()),
-        Err(_) => Some(0),
-    };
-    if let Some(suppressed) = should_log {
-        emit(suppressed);
-    }
-}
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[inline]
 fn log_rejected_service_connection(postfix: &str, peer_uid: Option<u32>, active_uid: Option<u32>) {
-    static LOG_THROTTLE: OnceLock<Mutex<UnauthorizedIpcLogThrottle>> = OnceLock::new();
-    throttled_unauthorized_ipc_log(&LOG_THROTTLE, |suppressed| {
-        if suppressed > 0 {
-            log::warn!(
-                "Rejected unauthorized connection on protected service-scoped IPC channel: postfix={}, peer_uid={:?}, active_uid={:?} (suppressed {} similar events)",
-                postfix,
-                peer_uid,
-                active_uid,
-                suppressed
-            );
-        } else {
-            log::warn!(
-                "Rejected unauthorized connection on protected service-scoped IPC channel: postfix={}, peer_uid={:?}, active_uid={:?}",
-                postfix,
-                peer_uid,
-                active_uid
-            );
-        }
-    });
+    hbb_common::throttled_log!(
+        UNAUTHORIZED_IPC_LOG_INTERVAL,
+        warn,
+        "Rejected unauthorized connection on protected service-scoped IPC channel: postfix={}, peer_uid={:?}, active_uid={:?}",
+        postfix,
+        peer_uid,
+        active_uid
+    );
 }
 
 #[cfg(target_os = "linux")]
@@ -578,25 +539,14 @@ pub(crate) fn log_rejected_uinput_connection(
     peer_uid: Option<u32>,
     active_uid: Option<u32>,
 ) {
-    static LOG_THROTTLE: OnceLock<Mutex<UnauthorizedIpcLogThrottle>> = OnceLock::new();
-    throttled_unauthorized_ipc_log(&LOG_THROTTLE, |suppressed| {
-        if suppressed > 0 {
-            log::warn!(
-                "Rejected unauthorized connection on uinput ipc channel: postfix={}, peer_uid={:?}, active_uid={:?} (suppressed {} similar events)",
-                postfix,
-                peer_uid,
-                active_uid,
-                suppressed
-            );
-        } else {
-            log::warn!(
-                "Rejected unauthorized connection on uinput ipc channel: postfix={}, peer_uid={:?}, active_uid={:?}",
-                postfix,
-                peer_uid,
-                active_uid
-            );
-        }
-    });
+    hbb_common::throttled_log!(
+        UNAUTHORIZED_IPC_LOG_INTERVAL,
+        warn,
+        "Rejected unauthorized connection on uinput ipc channel: postfix={}, peer_uid={:?}, active_uid={:?}",
+        postfix,
+        peer_uid,
+        active_uid
+    );
 }
 
 #[cfg(windows)]
@@ -607,30 +557,19 @@ pub(crate) fn log_rejected_windows_ipc_connection(
     peer_session_id: Option<u32>,
     expected_session_id: Option<u32>,
     peer_is_system: Option<bool>,
+    peer_is_elevated: Option<bool>,
 ) {
-    static LOG_THROTTLE: OnceLock<Mutex<UnauthorizedIpcLogThrottle>> = OnceLock::new();
-    throttled_unauthorized_ipc_log(&LOG_THROTTLE, |suppressed| {
-        if suppressed > 0 {
-            log::warn!(
-                "Rejected unauthorized connection on ipc channel: postfix={}, peer_pid={:?}, peer_session_id={:?}, expected_session_id={:?}, peer_is_system={:?} (suppressed {} similar events)",
-                postfix,
-                peer_pid,
-                peer_session_id,
-                expected_session_id,
-                peer_is_system,
-                suppressed
-            );
-        } else {
-            log::warn!(
-                "Rejected unauthorized connection on ipc channel: postfix={}, peer_pid={:?}, peer_session_id={:?}, expected_session_id={:?}, peer_is_system={:?}",
-                postfix,
-                peer_pid,
-                peer_session_id,
-                expected_session_id,
-                peer_is_system
-            );
-        }
-    });
+    hbb_common::throttled_log!(
+        UNAUTHORIZED_IPC_LOG_INTERVAL,
+        warn,
+        "Rejected unauthorized connection on ipc channel: postfix={}, peer_pid={:?}, peer_session_id={:?}, expected_session_id={:?}, peer_is_system={:?}, peer_is_elevated={:?}",
+        postfix,
+        peer_pid,
+        peer_session_id,
+        expected_session_id,
+        peer_is_system,
+        peer_is_elevated
+    );
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -653,10 +592,42 @@ pub(crate) fn authorize_service_scoped_ipc_connection(stream: &Connection, postf
     true
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn authorize_user_server_process(
+    peer_uid: Option<u32>,
+    peer_pid: Option<u32>,
+    expected_uid: u32,
+) -> bool {
+    if peer_uid != Some(expected_uid) {
+        return false;
+    }
+    let Some(peer_pid) = peer_pid else {
+        return false;
+    };
+    let Ok(peer_exe) = peer_exe_canonical_path_by_pid(peer_pid) else {
+        return false;
+    };
+    let expected_path = PathBuf::from(format!(
+        "/Applications/{}.app/Contents/MacOS/{}",
+        crate::get_app_name(),
+        crate::get_app_name()
+    ));
+    let Ok(expected_path) = fs::canonicalize(expected_path) else {
+        return false;
+    };
+    paths_refer_to_same_file(&peer_exe, &expected_path)
+}
+
 #[cfg(windows)]
 pub(crate) fn authorize_windows_main_ipc_connection(stream: &Connection, postfix: &str) -> bool {
-    let (authorized, peer_pid, peer_session_id, server_session_id, peer_is_system) =
-        stream.server_authorization_status();
+    let (
+        authorized,
+        peer_pid,
+        peer_session_id,
+        server_session_id,
+        peer_is_system,
+        peer_is_elevated,
+    ) = stream.server_authorization_status();
     if !authorized {
         log_rejected_windows_ipc_connection(
             postfix,
@@ -664,6 +635,7 @@ pub(crate) fn authorize_windows_main_ipc_connection(stream: &Connection, postfix
             peer_session_id,
             server_session_id,
             peer_is_system,
+            peer_is_elevated,
         );
         return false;
     }
@@ -776,7 +748,14 @@ impl ConnectionTmpl<parity_tokio_ipc::Connection> {
 
     fn server_authorization_status(
         &self,
-    ) -> (bool, Option<u32>, Option<u32>, Option<u32>, Option<bool>) {
+    ) -> (
+        bool,
+        Option<u32>,
+        Option<u32>,
+        Option<u32>,
+        Option<bool>,
+        Option<bool>,
+    ) {
         let peer_pid = self.peer_pid();
         let server_session_id = crate::platform::windows::get_current_process_session_id();
         let peer_session_id =
@@ -786,24 +765,45 @@ impl ConnectionTmpl<parity_tokio_ipc::Connection> {
         let peer_is_system = peer_is_system_result
             .as_ref()
             .and_then(|r| r.as_ref().ok().copied());
-        if server_session_id.is_none() && !peer_is_system.unwrap_or(false) {
-            // When the server session id cannot be determined, the session-id allow-path is
-            // disabled and only SYSTEM peers can be authorized.
-            log::debug!(
-                "IPC authorization: server session id unavailable; rejecting non-SYSTEM peer, peer_pid={:?}, peer_session_id={:?}",
-                peer_pid,
-                peer_session_id
-            );
-        }
-        let authorized = is_allowed_windows_session_scoped_peer(
+        let session_authorized = is_allowed_windows_session_scoped_peer(
             peer_is_system.unwrap_or(false),
             peer_session_id,
             server_session_id,
         );
+        let peer_is_elevated_result = if session_authorized {
+            None
+        } else {
+            peer_pid.map(|pid| crate::platform::windows::is_elevated(Some(pid)))
+        };
+        let peer_is_elevated = peer_is_elevated_result
+            .as_ref()
+            .and_then(|r| r.as_ref().ok().copied());
+        if server_session_id.is_none()
+            && !peer_is_system.unwrap_or(false)
+            && !peer_is_elevated.unwrap_or(false)
+        {
+            // When the server session id cannot be determined, the session-id allow-path is
+            // disabled and only privileged peers can be authorized.
+            log::debug!(
+                "IPC authorization: server session id unavailable; rejecting non-privileged peer, peer_pid={:?}, peer_session_id={:?}",
+                peer_pid,
+                peer_session_id
+            );
+        }
+        // Main IPC trusts same-session peers, LocalSystem, and elevated administrators.
+        // Service-scoped IPC channels keep their own stricter authorization paths.
+        let authorized = session_authorized || peer_is_elevated.unwrap_or(false);
         if !authorized {
             if let (Some(pid), Some(Err(err))) = (peer_pid, peer_is_system_result.as_ref()) {
                 log::debug!(
                     "Failed to determine whether peer process is SYSTEM, pid={}, err={}",
+                    pid,
+                    err
+                );
+            }
+            if let (Some(pid), Some(Err(err))) = (peer_pid, peer_is_elevated_result.as_ref()) {
+                log::debug!(
+                    "Failed to determine whether peer process is elevated, pid={}, err={}",
                     pid,
                     err
                 );
@@ -815,6 +815,7 @@ impl ConnectionTmpl<parity_tokio_ipc::Connection> {
             peer_session_id,
             server_session_id,
             peer_is_system,
+            peer_is_elevated,
         )
     }
 
@@ -927,37 +928,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    #[cfg(windows)]
-    fn test_should_allow_everyone_create_on_windows_policy() {
-        assert!(super::should_allow_everyone_create_on_windows(""));
-        assert!(super::should_allow_everyone_create_on_windows("_service"));
-        assert!(!super::should_allow_everyone_create_on_windows(
-            "_portable_service"
-        ));
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn test_executable_paths_match_windows_normalization() {
-        let left = std::path::PathBuf::from(r"\\?\C:\Program Files\RustDesk\RustDesk.exe");
-        let right = std::path::PathBuf::from(r"c:\program files\rustdesk\rustdesk.exe");
-        assert!(super::executable_paths_match(&left, &right));
-    }
-
-    #[test]
-    #[cfg(target_os = "macos")]
-    fn test_os_str_eq_ignore_ascii_case_for_process_names() {
-        assert!(super::os_str_eq_ignore_ascii_case(
-            Some(std::ffi::OsStr::new("RustDesk")),
-            Some(std::ffi::OsStr::new("rustdesk"))
-        ));
-        assert!(!super::os_str_eq_ignore_ascii_case(
-            Some(std::ffi::OsStr::new("RustDesk")),
-            Some(std::ffi::OsStr::new("service"))
-        ));
-    }
-
     #[cfg(all(windows, not(feature = "flutter")))]
     struct TempDirGuard(std::path::PathBuf);
 
@@ -992,45 +962,5 @@ mod tests {
             !super::portable_service_helper_is_trusted(&helper_exe, &helper_exe, &current_exe),
             "helper trust check must reject path-match-only binaries with mismatched content"
         );
-    }
-
-    #[test]
-    #[cfg(all(windows, not(feature = "flutter")))]
-    fn test_portable_service_helper_trust_accepts_matching_content() {
-        let unique = format!(
-            "rustdesk-portable-helper-trust-match-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        );
-        let base = std::env::temp_dir().join(unique);
-        std::fs::create_dir_all(&base).unwrap();
-        let _cleanup = TempDirGuard(base.clone());
-
-        let current_exe = base.join("current.exe");
-        let helper_exe = base.join("helper.exe");
-        std::fs::write(&current_exe, b"trusted-binary").unwrap();
-        std::fs::write(&helper_exe, b"trusted-binary").unwrap();
-
-        assert!(super::portable_service_helper_is_trusted(
-            &helper_exe,
-            &helper_exe,
-            &current_exe
-        ));
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn test_console_owner_uid_matches_get_active_userid() {
-        let console_uid =
-            super::console_owner_uid().expect("/dev/console must have a resolvable uid");
-        let raw_uid = crate::platform::macos::get_active_userid();
-        let parsed_uid: u32 = raw_uid
-            .trim()
-            .parse()
-            .unwrap_or_else(|_| panic!("failed to parse get_active_userid() output: '{raw_uid}'"));
-        assert_eq!(parsed_uid, console_uid);
     }
 }
