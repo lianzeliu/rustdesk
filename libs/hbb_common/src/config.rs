@@ -2176,12 +2176,6 @@ impl LocalConfig {
                 .insert("allow-d3d-render".to_string(), "Y".to_string());
             store = true;
         }
-        if !config.options.contains_key("enable-webrtc") {
-            config
-                .options
-                .insert("enable-webrtc".to_string(), "Y".to_string());
-            store = true;
-        }
         if store {
             config.store();
         }
