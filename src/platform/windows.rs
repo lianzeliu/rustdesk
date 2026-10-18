@@ -2084,6 +2084,171 @@ pub fn get_license_from_exe_name() -> ResultType<CustomServer> {
 
 // We can't directly use `RegKey::set_value` to update the registry value, because it will fail with `ERROR_ACCESS_DENIED`
 
+#[inline]
+pub fn is_win_server() -> bool {
+    unsafe { is_windows_server() > 0 }
+}
+
+#[inline]
+pub fn is_win_10_or_greater() -> bool {
+    unsafe { is_windows_10_or_greater() > 0 }
+}
+
+pub fn bootstrap() -> bool {
+    if let Ok(lic) = get_license_from_exe_name() {
+        *config::EXE_RENDEZVOUS_SERVER.write().unwrap() = lic.host.clone();
+    }
+
+    #[cfg(debug_assertions)]
+    {
+        true
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        // This function will cause `'sciter.dll' was not found neither in PATH nor near the current executable.` when debugging RustDesk.
+        // Only call set_safe_load_dll() on Windows 10 or greater
+        if is_win_10_or_greater() {
+            set_safe_load_dll()
+        } else {
+            true
+        }
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn set_safe_load_dll() -> bool {
+    if !unsafe { set_default_dll_directories() } {
+        return false;
+    }
+
+    // `SetDllDirectoryW` should never fail.
+    // https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-setdlldirectoryw
+    if unsafe { SetDllDirectoryW(wide_string("").as_ptr()) == FALSE } {
+        eprintln!("SetDllDirectoryW failed: {}", io::Error::last_os_error());
+        return false;
+    }
+
+    true
+}
+
+// https://docs.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-setdefaultdlldirectories
+#[cfg(not(debug_assertions))]
+unsafe fn set_default_dll_directories() -> bool {
+    let module = LoadLibraryExW(
+        wide_string("Kernel32.dll").as_ptr(),
+        0 as _,
+        LOAD_LIBRARY_SEARCH_SYSTEM32,
+    );
+    if module.is_null() {
+        return false;
+    }
+
+    match CString::new("SetDefaultDllDirectories") {
+        Err(e) => {
+            eprintln!("CString::new failed: {}", e);
+            return false;
+        }
+        Ok(func_name) => {
+            let func = GetProcAddress(module, func_name.as_ptr());
+            if func.is_null() {
+                eprintln!("GetProcAddress failed: {}", io::Error::last_os_error());
+                return false;
+            }
+            type SetDefaultDllDirectories = unsafe extern "system" fn(DWORD) -> BOOL;
+            let func: SetDefaultDllDirectories = std::mem::transmute(func);
+            if func(LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_USER_DIRS) == FALSE {
+                eprintln!(
+                    "SetDefaultDllDirectories failed: {}",
+                    io::Error::last_os_error()
+                );
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn get_custom_icon(install_dir: &str, exe: &str) -> Option<String> {
+    const RELATIVE_ICON_PATH: &str = "data\\flutter_assets\\assets\\icon.ico";
+    if crate::is_custom_client() {
+        if let Some(p) = PathBuf::from(exe).parent() {
+            let alter_icon_path = p.join(RELATIVE_ICON_PATH);
+            if alter_icon_path.exists() {
+                // During installation, files under `install_dir` may not exist yet.
+                // So we validate the icon from the current executable directory first.
+                // But for shortcut/registry icon location, we should point to the final
+                // installed path so the icon works across different Windows users.
+                if let Ok(metadata) = std::fs::symlink_metadata(&alter_icon_path) {
+                    if metadata.is_symlink() {
+                        log::warn!(
+                            "Custom icon at {:?} is a symlink, refusing to use it.",
+                            alter_icon_path
+                        );
+                        return None;
+                    }
+                    if metadata.is_file() {
+                        return if install_dir.is_empty() {
+                            Some(alter_icon_path.to_string_lossy().to_string())
+                        } else {
+                            Some(format!("{}\\{}", install_dir, RELATIVE_ICON_PATH))
+                        };
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+#[inline]
+fn get_shortcut_icon_location(install_dir: &str, exe: &str) -> String {
+    if exe.is_empty() {
+        return "".to_owned();
+    }
+
+    get_custom_icon(install_dir, exe)
+        .map(|p| format!("oLink.IconLocation = \"{}\"", p))
+        .unwrap_or_default()
+}
+
+pub fn create_shortcut(id: &str) -> ResultType<()> {
+    if !crate::common::is_valid_untrusted_peer_id(id) {
+        bail!("Invalid peer id for shortcut");
+    }
+
+    let exe = std::env::current_exe()?.to_str().unwrap_or("").to_owned();
+    // https://github.com/rustdesk/rustdesk/issues/13735
+    // Replace ':' with '_' for filename since ':' is not allowed in Windows filenames
+    // https://github.com/rustdesk/hbb_common/blob/8b0e25867375ba9e6bff548acf44fe6d6ffa7c0e/src/config.rs#L1384
+    let filename = id.replace(':', "_");
+    let shortcut_icon_location = get_shortcut_icon_location("", &exe);
+    let shortcut = write_vbs(
+        format!(
+            "
+Set oWS = WScript.CreateObject(\"WScript.Shell\")
+strDesktop = oWS.SpecialFolders(\"Desktop\")
+Set objFSO = CreateObject(\"Scripting.FileSystemObject\")
+sLinkFile = objFSO.BuildPath(strDesktop, \"{filename}.lnk\")
+Set oLink = oWS.CreateShortcut(sLinkFile)
+    oLink.TargetPath = \"{exe}\"
+    oLink.Arguments = \"--connect {id}\"
+    {shortcut_icon_location}
+oLink.Save
+        "
+        ),
+        "connect_shortcut",
+    )?
+    .to_str()
+    .unwrap_or("")
+    .to_owned();
+    std::process::Command::new("cscript")
+        .arg(&shortcut)
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()?;
+    allow_err!(std::fs::remove_file(shortcut));
+    Ok(())
+}
+
 pub fn enable_lowlevel_keyboard(hwnd: HWND) {
     let ret = unsafe { win32_enable_lowlevel_keyboard(hwnd) };
     if ret != 0 {
