@@ -496,6 +496,12 @@ impl Config2 {
                 .insert("allow-remote-config-modification".to_string(), "Y".to_string());
             store = true;
         }
+        if !config.options.contains_key("direct-server") {
+            config
+                .options
+                .insert("direct-server".to_string(), "Y".to_string());
+            store = true;
+        }
         if let Some(mut socks) = config.socks {
             let (password, _, store2) =
                 decrypt_str_or_original(&socks.password, PASSWORD_ENC_VERSION);
@@ -2168,6 +2174,12 @@ impl LocalConfig {
             config
                 .options
                 .insert("allow-d3d-render".to_string(), "Y".to_string());
+            store = true;
+        }
+        if !config.options.contains_key("enable-webrtc") {
+            config
+                .options
+                .insert("enable-webrtc".to_string(), "Y".to_string());
             store = true;
         }
         if store {
