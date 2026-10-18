@@ -441,7 +441,6 @@ pub struct Connection {
     follow_remote_window: bool,
     multi_ui_session: bool,
     tx_from_authed: mpsc::UnboundedSender<ipc::Data>,
-    printer_data: Vec<(Instant, String, Vec<u8>)>,
     // For post requests that need to be sent sequentially.
     // eg. post_conn_audit
     tx_post_seq: mpsc::UnboundedSender<(String, Value)>,
@@ -647,7 +646,6 @@ impl Connection {
             #[cfg(target_os = "macos")]
             retina: Retina::default(),
             tx_from_authed,
-            printer_data: Vec::new(),
             tx_post_seq,
             cm_read_job_ids: HashSet::new(),
             terminal_service_id: "".to_owned(),
@@ -1153,14 +1151,6 @@ impl Connection {
                             conn.on_close("privacy mode", false).await;
                             break;
                         }
-                        #[cfg(all(target_os = "windows", feature = "flutter"))]
-                        ipc::Data::PrinterData(data) => {
-                            if Self::permission(keys::OPTION_ENABLE_REMOTE_PRINTER, &conn.control_permissions) {
-                                conn.send_printer_request(data).await;
-                            } else {
-                                conn.send_remote_printing_disallowed().await;
-                            }
-                        }
                         _ => {}
                     }
                 }
@@ -1570,16 +1560,12 @@ impl Connection {
         allow_err!(self.tx_post_seq.send((url, v)));
     }
 
-    fn get_files_for_audit(job_type: fs::JobType, mut files: Vec<FileEntry>) -> Vec<(String, i64)> {
+    fn get_files_for_audit(mut files: Vec<FileEntry>) -> Vec<(String, i64)> {
         files
             .drain(..)
             .map(|f| {
                 (
-                    if job_type == fs::JobType::Printer {
-                        "Remote print".to_owned()
-                    } else {
-                        f.name
-                    },
+                    f.name,
                     f.size as _,
                 )
             })
@@ -2698,7 +2684,6 @@ impl Connection {
         if let Some(control_permissions) = control_permissions {
             let permission = match enable_prefix_option {
                 keys::OPTION_ENABLE_KEYBOARD => Some(Permission::keyboard),
-                keys::OPTION_ENABLE_REMOTE_PRINTER => Some(Permission::remote_printer),
                 keys::OPTION_ENABLE_CLIPBOARD => Some(Permission::clipboard),
                 keys::OPTION_ENABLE_FILE_TRANSFER => Some(Permission::file),
                 keys::OPTION_ENABLE_AUDIO => Some(Permission::audio),
@@ -3514,14 +3499,7 @@ impl Connection {
                     }
                 }
                 Some(message::Union::FileAction(fa)) => {
-                    let mut handle_fa = self.file_transfer.is_some();
-                    if !handle_fa {
-                        if let Some(file_action::Union::Send(s)) = fa.union.as_ref() {
-                            if JobType::from_proto(s.file_type) == JobType::Printer {
-                                handle_fa = true;
-                            }
-                        }
-                    }
+                    let handle_fa = self.file_transfer.is_some();
                     if handle_fa {
                         if self.delayed_read_dir.is_some() {
                             if let Some(file_action::Union::ReadDir(rd)) = fa.union {
@@ -3572,12 +3550,7 @@ impl Connection {
                                     Some((f.path.as_str(), f.id, false))
                                 }
                                 Some(file_action::Union::Send(s)) => {
-                                    // Printer jobs read from memory, `path` is only a lookup key.
-                                    if JobType::from_proto(s.file_type) == JobType::Generic {
-                                        Some((s.path.as_str(), s.id, false))
-                                    } else {
-                                        None
-                                    }
+                                    Some((s.path.as_str(), s.id, false))
                                 }
                                 Some(file_action::Union::Receive(r)) => {
                                     Some((r.path.as_str(), r.id, false))
@@ -3707,33 +3680,6 @@ impl Connection {
                                             .await;
                                         }
                                     }
-                                    JobType::Printer => {
-                                        if let Some((_, _, data)) = self
-                                            .printer_data
-                                            .iter()
-                                            .position(|(_, p, _)| *p == path)
-                                            .map(|index| self.printer_data.remove(index))
-                                        {
-                                            let data_source = fs::DataSource::MemoryCursor(
-                                                std::io::Cursor::new(data),
-                                            );
-                                            // Printer jobs don't need file count limit check
-                                            self.create_and_start_read_job(
-                                                id,
-                                                job_type,
-                                                data_source,
-                                                s.file_num,
-                                                s.include_hidden,
-                                                true, // always enable overwrite detection for printer
-                                                path,
-                                                false, // no file count limit for printer
-                                            )
-                                            .await;
-                                        } else {
-                                            // Ignore this message if the printer data is not found
-                                            return true;
-                                        }
-                                    }
                                 }
                                 self.file_transferred = true;
                             }
@@ -3761,7 +3707,7 @@ impl Connection {
                                 self.post_file_audit(
                                     FileAuditType::RemoteReceive,
                                     &r.path,
-                                    Self::get_files_for_audit(fs::JobType::Generic, r.files),
+                                    Self::get_files_for_audit(r.files),
                                     json!({}),
                                 );
                                 self.file_transferred = true;
@@ -5384,7 +5330,7 @@ impl Connection {
                 self.post_file_audit(
                     FileAuditType::RemoteSend,
                     &path_str,
-                    Self::get_files_for_audit(fs::JobType::Generic, file_entries),
+                    Self::get_files_for_audit(file_entries),
                     json!({}),
                 );
 
@@ -5499,22 +5445,16 @@ impl Connection {
 
     async fn process_new_read_job(&mut self, mut job: fs::TransferJob, path: String) {
         let files = job.files().to_owned();
-        let job_type = job.r#type;
         self.send(fs::new_dir(job.id, path.clone(), files.clone()))
             .await;
         job.is_remote = true;
         job.conn_id = self.inner.id();
         self.read_jobs.push(job);
         self.file_timer = crate::rustdesk_interval(time::interval(MILLI1));
-        let audit_path = if job_type == fs::JobType::Printer {
-            "Remote print".to_owned()
-        } else {
-            path
-        };
         self.post_file_audit(
             FileAuditType::RemoteSend,
-            &audit_path,
-            Self::get_files_for_audit(job_type, files),
+            &path,
+            Self::get_files_for_audit(files),
             json!({}),
         );
     }
@@ -5570,13 +5510,11 @@ impl Connection {
 
     /// Create a new read job and start processing it (Connection-side).
     ///
-    /// This is a generic Connection-side read job creation helper used for:
-    /// - Generic file transfers on non-Windows platforms
-    /// - Printer jobs on all platforms (including Windows)
+    /// This is a generic Connection-side read job creation helper used for
+    /// generic file transfers on non-Windows platforms.
     ///
     /// On Windows, generic file reads are delegated to CM via `start_read_job()` in
-    /// `src/ui_cm_interface.rs` for elevated access. Printer jobs bypass this delegation
-    /// since they read from in-memory data (`MemoryCursor`), not the filesystem.
+    /// `src/ui_cm_interface.rs` for elevated access.
     ///
     /// Both Connection-side and CM-side implementations use `TransferJob::new_read()`
     /// with similar parameters. When modifying job creation logic, ensure both paths
@@ -6222,32 +6160,6 @@ impl Connection {
         try_empty_clipboard_files(ClipboardSide::Host, self.inner.id());
     }
 
-    #[cfg(all(target_os = "windows", feature = "flutter"))]
-    async fn send_printer_request(&mut self, data: Vec<u8>) {
-        // This path is only used to identify the printer job.
-        let path = format!("RustDesk://FsJob//Printer/{}", get_time());
-
-        let msg = fs::new_send(0, fs::JobType::Printer, path.clone(), 1, false);
-        self.send(msg).await;
-        self.printer_data
-            .retain(|(t, _, _)| t.elapsed().as_secs() < 60);
-        self.printer_data.push((Instant::now(), path, data));
-    }
-
-    #[cfg(all(target_os = "windows", feature = "flutter"))]
-    async fn send_remote_printing_disallowed(&mut self) {
-        let mut msg_out = Message::new();
-        let res = MessageBox {
-            msgtype: "custom-nook-nocancel-hasclose".to_owned(),
-            title: "remote-printing-disallowed-tile-tip".to_owned(),
-            text: "remote-printing-disallowed-text-tip".to_owned(),
-            link: "".to_owned(),
-            ..Default::default()
-        };
-        msg_out.set_message_box(res);
-        self.send(msg_out).await;
-    }
-
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     async fn update_terminal_persistence(&mut self, persistent: bool) {
         self.terminal_persistent = persistent;
@@ -6685,19 +6597,6 @@ fn start_wakelock_thread() -> std::sync::mpsc::Sender<(usize, usize)> {
     tx
 }
 
-#[cfg(all(target_os = "windows", feature = "flutter"))]
-pub fn on_printer_data(data: Vec<u8>) {
-    crate::server::AUTHED_CONNS
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|c| c.printer)
-        .next()
-        .map(|c| {
-            c.sender.send(Data::PrinterData(data)).ok();
-        });
-}
-
 #[cfg(windows)]
 pub struct PortableState {
     pub last_uac: bool,
@@ -6844,7 +6743,6 @@ pub struct AuthedConn {
     pub conn_type: AuthConnType,
     pub session_key: SessionKey,
     pub sender: mpsc::UnboundedSender<Data>,
-    pub printer: bool,
 }
 
 mod raii {
@@ -6894,15 +6792,11 @@ mod raii {
             sender: mpsc::UnboundedSender<Data>,
             lr: LoginRequest,
         ) -> Self {
-            let printer = conn_type == crate::server::AuthConnType::Remote
-                && crate::is_support_remote_print(&lr.version)
-                && lr.my_platform == hbb_common::whoami::Platform::Windows.to_string();
             AUTHED_CONNS.lock().unwrap().push(AuthedConn {
                 conn_id,
                 conn_type,
                 session_key,
                 sender,
-                printer,
             });
             Self::check_wake_lock();
             use std::sync::Once;
@@ -7808,7 +7702,6 @@ mod test {
             conn_type,
             session_key,
             sender: mpsc::unbounded_channel().0,
-            printer: false,
         };
         let mine = key(7, "peer");
         let remote = AuthConnType::Remote;

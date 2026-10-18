@@ -63,10 +63,6 @@ use winapi::{
             TOKEN_ELEVATION, TOKEN_GROUPS, TOKEN_QUERY, TOKEN_TYPE,
         },
         winreg::HKEY_CURRENT_USER,
-        winspool::{
-            EnumPrintersW, GetDefaultPrinterW, PRINTER_ENUM_CONNECTIONS, PRINTER_ENUM_LOCAL,
-            PRINTER_INFO_1W,
-        },
         winuser::*,
     },
 };
@@ -123,7 +119,6 @@ pub const SET_FOREGROUND_WINDOW: &'static str = "SET_FOREGROUND_WINDOW";
 
 const REG_NAME_INSTALL_DESKTOPSHORTCUTS: &str = "DESKTOPSHORTCUTS";
 const REG_NAME_INSTALL_STARTMENUSHORTCUTS: &str = "STARTMENUSHORTCUTS";
-pub const REG_NAME_INSTALL_PRINTER: &str = "PRINTER";
 const REG_NAME_MSI_PRODUCT_CODE: &str = "MsiProductCode";
 const REG_NAME_UNINSTALL_STRING: &str = "UninstallString";
 const REG_NAME_WINDOWS_INSTALLER: &str = "WindowsInstaller";
@@ -1380,36 +1375,11 @@ pub fn get_install_options() -> String {
     if let Some(start_menu_shortcuts) = start_menu_shortcuts {
         opts.insert(REG_NAME_INSTALL_STARTMENUSHORTCUTS, start_menu_shortcuts);
     }
-    let printer = get_reg_of_hkcr(&subkey, REG_NAME_INSTALL_PRINTER);
-    if let Some(printer) = printer {
-        opts.insert(REG_NAME_INSTALL_PRINTER, printer);
-    }
     serde_json::to_string(&opts).unwrap_or("{}".to_owned())
 }
 
-pub fn get_silent_install_options(printer_override: Option<bool>) -> &'static str {
-    if !is_win_10_or_greater() {
-        return "desktopicon startmenu";
-    }
-
-    let install_printer = match printer_override {
-        Some(override_value) => override_value,
-        None => {
-            let app_name = crate::get_app_name();
-            let subkey = format!(".{}", app_name.to_lowercase());
-            let printer = get_reg_of_hkcr(&subkey, REG_NAME_INSTALL_PRINTER);
-            printer.as_deref() == Some("1")
-                && remote_printer::is_rd_printer_installed(&app_name).unwrap_or_else(|err| {
-                    log::warn!("Failed to check printer installation status: {err}; skipping printer installation");
-                    false
-                })
-        }
-    };
-    if install_printer {
-        "desktopicon startmenu printer"
-    } else {
-        "desktopicon startmenu"
-    }
+pub fn get_silent_install_options() -> &'static str {
+    "desktopicon startmenu"
 }
 
 // This function return Option<String>, because some registry value may be empty.
@@ -1566,7 +1536,6 @@ fn get_after_install(
     exe: &str,
     reg_value_start_menu_shortcuts: Option<String>,
     reg_value_desktop_shortcuts: Option<String>,
-    reg_value_printer: Option<String>,
 ) -> String {
     let app_name = crate::get_app_name();
     let ext = app_name.to_lowercase();
@@ -1591,20 +1560,11 @@ fn get_after_install(
             )
         })
         .unwrap_or_default();
-    let reg_printer = reg_value_printer
-        .map(|v| {
-            format!(
-                "reg add HKEY_CLASSES_ROOT\\.{ext} /f /v {REG_NAME_INSTALL_PRINTER} /t REG_SZ /d \"{v}\""
-            )
-        })
-        .unwrap_or_default();
-
     format!("
     chcp 65001
     reg add HKEY_CLASSES_ROOT\\.{ext} /f
     {desktop_shortcuts}
     {start_menu_shortcuts}
-    {reg_printer}
     reg add HKEY_CLASSES_ROOT\\.{ext}\\DefaultIcon /f
     reg add HKEY_CLASSES_ROOT\\.{ext}\\DefaultIcon /f /ve /t REG_SZ  /d \"\\\"{nested_exe}\\\",0\"
     reg add HKEY_CLASSES_ROOT\\.{ext}\\shell /f
@@ -1630,7 +1590,7 @@ pub fn install_me(options: &str, path: String, silent: bool, debug: bool) -> Res
     if get_windows_installer_state(&installed_subkey)? == Some(true) {
         bail!("Cannot install the EXE package over an existing MSI installation");
     }
-    let uninstall_str = get_uninstall(false, false)?;
+    let uninstall_str = get_uninstall(false)?;
     let mut path = path.trim_end_matches('\\').to_owned();
     let (subkey, _path, start_menu, exe) = get_default_install_info();
     let mut exe = exe;
@@ -1689,7 +1649,6 @@ pub fn install_me(options: &str, path: String, silent: bool, debug: bool) -> Res
         embedded_tray_shortcut_commands(&app_name, &exe, shortcut_icon_location.as_deref())?;
     let mut reg_value_desktop_shortcuts = "0".to_owned();
     let mut reg_value_start_menu_shortcuts = "0".to_owned();
-    let mut reg_value_printer = "0".to_owned();
     let mut shortcuts = Default::default();
     if options.contains("desktopicon") {
         shortcuts = format!(
@@ -1709,11 +1668,6 @@ copy /Y \"{tmp_path}\\Uninstall {app_name}.lnk\" \"{start_menu}\\\"
         );
         reg_value_start_menu_shortcuts = "1".to_owned();
     }
-    let install_printer = options.contains("printer") && is_win_10_or_greater();
-    if install_printer {
-        reg_value_printer = "1".to_owned();
-    }
-
     let meta = std::fs::symlink_metadata(&current_exe)?;
     let mut size = meta.len() / 1024;
     if let Some(parent_dir) = current_exe.parent() {
@@ -1750,16 +1704,6 @@ copy /Y \"{tmp_path}\\{app_name} Tray.lnk\" \"%PROGRAMDATA%\\Microsoft\\Windows\
 ")
     };
 
-    let install_remote_printer = if install_printer {
-        // No need to use `|| true` here.
-        // The script will not exit even if `--install-remote-printer` panics.
-        format!("\"{}\" --install-remote-printer", &src_exe)
-    } else if is_win_10_or_greater() {
-        format!("\"{}\" --uninstall-remote-printer", &src_exe)
-    } else {
-        "".to_owned()
-    };
-
     // Remember to check if `update_me` need to be changed if changing the `cmds`.
     // No need to merge the existing dup code, because the code in these two functions are too critical.
     // New code should be written in a common function.
@@ -1791,7 +1735,6 @@ copy /Y \"{tmp_path}\\Uninstall {app_name}.lnk\" \"{path}\\\"
 {dels}
 {import_config}
 {after_install}
-{install_remote_printer}
 {sleep}
     ",
         display_icon = shortcut_icon_location.as_deref().unwrap_or(exe.as_str()),
@@ -1802,7 +1745,6 @@ copy /Y \"{tmp_path}\\Uninstall {app_name}.lnk\" \"{path}\\\"
             &exe,
             Some(reg_value_start_menu_shortcuts),
             Some(reg_value_desktop_shortcuts),
-            Some(reg_value_printer)
         ),
         sleep = if debug { "timeout 300" } else { "" },
         dels = if debug { "" } else { &dels },
@@ -1817,7 +1759,7 @@ copy /Y \"{tmp_path}\\Uninstall {app_name}.lnk\" \"{path}\\\"
 pub fn run_after_install() -> ResultType<()> {
     let (_, _, _, exe) = get_install_info();
     run_cmds(
-        get_after_install(&exe, None, None, None),
+        get_after_install(&exe, None, None),
         true,
         "after_install",
     )
@@ -1856,13 +1798,7 @@ fn get_before_uninstall(kill_self: bool) -> String {
 /// - `kill_self`: The command will kill the process of current app name. If `true`, it will kill
 ///   the current process as well. If `false`, it will exclude the current process from the kill
 ///   command.
-/// - `uninstall_printer`: If `true`, includes commands to uninstall the remote printer.
-///
-/// # Details
-/// The `uninstall_printer` parameter determines whether the command to uninstall the remote printer
-/// is included in the generated uninstall script. If `uninstall_printer` is `false`, the printer
-/// related command is omitted from the script.
-fn get_uninstall(kill_self: bool, uninstall_printer: bool) -> ResultType<String> {
+fn get_uninstall(kill_self: bool) -> ResultType<String> {
     let (subkey, path, start_menu, _) = get_install_info();
     let installer_state = get_windows_installer_state(&subkey)?;
     if let Some(product_code) = get_msi_product_code(&subkey, installer_state)? {
@@ -1873,19 +1809,14 @@ fn get_uninstall(kill_self: bool, uninstall_printer: bool) -> ResultType<String>
     }
 
     let mut uninstall_cert_cmd = "".to_string();
-    let mut uninstall_printer_cmd = "".to_string();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_path) = exe.to_str() {
             uninstall_cert_cmd = format!("\"{}\" --uninstall-cert", exe_path);
-            if uninstall_printer {
-                uninstall_printer_cmd = format!("\"{}\" --uninstall-remote-printer", &exe_path);
-            }
         }
     }
     Ok(format!(
         "
     {before_uninstall}
-    {uninstall_printer_cmd}
     {uninstall_cert_cmd}
     reg delete {subkey} /f
     {uninstall_amyuni_idd}
@@ -1901,7 +1832,7 @@ fn get_uninstall(kill_self: bool, uninstall_printer: bool) -> ResultType<String>
 }
 
 pub fn uninstall_me(kill_self: bool) -> ResultType<()> {
-    run_cmds(get_uninstall(kill_self, true)?, true, "uninstall")
+    run_cmds(get_uninstall(kill_self)?, true, "uninstall")
 }
 
 fn write_vbs(cmds: String, tip: &str) -> ResultType<PathBuf> {
@@ -2152,187 +2083,6 @@ pub fn get_license_from_exe_name() -> ResultType<CustomServer> {
 }
 
 // We can't directly use `RegKey::set_value` to update the registry value, because it will fail with `ERROR_ACCESS_DENIED`
-// So we have to use `run_cmds` to update the registry value.
-pub fn update_install_option(k: &str, v: &str) -> ResultType<()> {
-    // Don't update registry if not installed or not server process.
-    if !is_installed() || !crate::is_server() {
-        return Ok(());
-    }
-    if ![REG_NAME_INSTALL_PRINTER].contains(&k) || !["0", "1"].contains(&v) {
-        return Ok(());
-    }
-    let app_name = crate::get_app_name();
-    let ext = app_name.to_lowercase();
-    let cmds =
-        format!("chcp 65001 && reg add HKEY_CLASSES_ROOT\\.{ext} /f /v {k} /t REG_SZ /d \"{v}\"");
-    run_cmds(cmds, false, "update_install_option")?;
-    Ok(())
-}
-
-#[inline]
-pub fn is_win_server() -> bool {
-    unsafe { is_windows_server() > 0 }
-}
-
-#[inline]
-pub fn is_win_10_or_greater() -> bool {
-    unsafe { is_windows_10_or_greater() > 0 }
-}
-
-pub fn bootstrap() -> bool {
-    if let Ok(lic) = get_license_from_exe_name() {
-        *config::EXE_RENDEZVOUS_SERVER.write().unwrap() = lic.host.clone();
-    }
-
-    #[cfg(debug_assertions)]
-    {
-        true
-    }
-    #[cfg(not(debug_assertions))]
-    {
-        // This function will cause `'sciter.dll' was not found neither in PATH nor near the current executable.` when debugging RustDesk.
-        // Only call set_safe_load_dll() on Windows 10 or greater
-        if is_win_10_or_greater() {
-            set_safe_load_dll()
-        } else {
-            true
-        }
-    }
-}
-
-#[cfg(not(debug_assertions))]
-fn set_safe_load_dll() -> bool {
-    if !unsafe { set_default_dll_directories() } {
-        return false;
-    }
-
-    // `SetDllDirectoryW` should never fail.
-    // https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-setdlldirectoryw
-    if unsafe { SetDllDirectoryW(wide_string("").as_ptr()) == FALSE } {
-        eprintln!("SetDllDirectoryW failed: {}", io::Error::last_os_error());
-        return false;
-    }
-
-    true
-}
-
-// https://docs.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-setdefaultdlldirectories
-#[cfg(not(debug_assertions))]
-unsafe fn set_default_dll_directories() -> bool {
-    let module = LoadLibraryExW(
-        wide_string("Kernel32.dll").as_ptr(),
-        0 as _,
-        LOAD_LIBRARY_SEARCH_SYSTEM32,
-    );
-    if module.is_null() {
-        return false;
-    }
-
-    match CString::new("SetDefaultDllDirectories") {
-        Err(e) => {
-            eprintln!("CString::new failed: {}", e);
-            return false;
-        }
-        Ok(func_name) => {
-            let func = GetProcAddress(module, func_name.as_ptr());
-            if func.is_null() {
-                eprintln!("GetProcAddress failed: {}", io::Error::last_os_error());
-                return false;
-            }
-            type SetDefaultDllDirectories = unsafe extern "system" fn(DWORD) -> BOOL;
-            let func: SetDefaultDllDirectories = std::mem::transmute(func);
-            if func(LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_USER_DIRS) == FALSE {
-                eprintln!(
-                    "SetDefaultDllDirectories failed: {}",
-                    io::Error::last_os_error()
-                );
-                return false;
-            }
-        }
-    }
-    true
-}
-
-fn get_custom_icon(install_dir: &str, exe: &str) -> Option<String> {
-    const RELATIVE_ICON_PATH: &str = "data\\flutter_assets\\assets\\icon.ico";
-    if crate::is_custom_client() {
-        if let Some(p) = PathBuf::from(exe).parent() {
-            let alter_icon_path = p.join(RELATIVE_ICON_PATH);
-            if alter_icon_path.exists() {
-                // During installation, files under `install_dir` may not exist yet.
-                // So we validate the icon from the current executable directory first.
-                // But for shortcut/registry icon location, we should point to the final
-                // installed path so the icon works across different Windows users.
-                if let Ok(metadata) = std::fs::symlink_metadata(&alter_icon_path) {
-                    if metadata.is_symlink() {
-                        log::warn!(
-                            "Custom icon at {:?} is a symlink, refusing to use it.",
-                            alter_icon_path
-                        );
-                        return None;
-                    }
-                    if metadata.is_file() {
-                        return if install_dir.is_empty() {
-                            Some(alter_icon_path.to_string_lossy().to_string())
-                        } else {
-                            Some(format!("{}\\{}", install_dir, RELATIVE_ICON_PATH))
-                        };
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-#[inline]
-fn get_shortcut_icon_location(install_dir: &str, exe: &str) -> String {
-    if exe.is_empty() {
-        return "".to_owned();
-    }
-
-    get_custom_icon(install_dir, exe)
-        .map(|p| format!("oLink.IconLocation = \"{}\"", p))
-        .unwrap_or_default()
-}
-
-pub fn create_shortcut(id: &str) -> ResultType<()> {
-    if !crate::common::is_valid_untrusted_peer_id(id) {
-        bail!("Invalid peer id for shortcut");
-    }
-
-    let exe = std::env::current_exe()?.to_str().unwrap_or("").to_owned();
-    // https://github.com/rustdesk/rustdesk/issues/13735
-    // Replace ':' with '_' for filename since ':' is not allowed in Windows filenames
-    // https://github.com/rustdesk/hbb_common/blob/8b0e25867375ba9e6bff548acf44fe6d6ffa7c0e/src/config.rs#L1384
-    let filename = id.replace(':', "_");
-    let shortcut_icon_location = get_shortcut_icon_location("", &exe);
-    let shortcut = write_vbs(
-        format!(
-            "
-Set oWS = WScript.CreateObject(\"WScript.Shell\")
-strDesktop = oWS.SpecialFolders(\"Desktop\")
-Set objFSO = CreateObject(\"Scripting.FileSystemObject\")
-sLinkFile = objFSO.BuildPath(strDesktop, \"{filename}.lnk\")
-Set oLink = oWS.CreateShortcut(sLinkFile)
-    oLink.TargetPath = \"{exe}\"
-    oLink.Arguments = \"--connect {id}\"
-    {shortcut_icon_location}
-oLink.Save
-        "
-        ),
-        "connect_shortcut",
-    )?
-    .to_str()
-    .unwrap_or("")
-    .to_owned();
-    std::process::Command::new("cscript")
-        .arg(&shortcut)
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()?;
-    allow_err!(std::fs::remove_file(shortcut));
-    Ok(())
-}
 
 pub fn enable_lowlevel_keyboard(hwnd: HWND) {
     let ret = unsafe { win32_enable_lowlevel_keyboard(hwnd) };
@@ -3564,18 +3314,6 @@ reg add {subkey} /f /v EstimatedSize /t REG_DWORD /d {size}
         "".to_owned()
     };
 
-    // No need to check the install option here, `is_rd_printer_installed` rarely fails.
-    let is_printer_installed = remote_printer::is_rd_printer_installed(&app_name).unwrap_or(false);
-    // Do nothing if the printer is not installed or failed to query if the printer is installed.
-    let (uninstall_printer_cmd, install_printer_cmd) = if is_printer_installed {
-        (
-            format!("\"{}\" --uninstall-remote-printer", &src_exe),
-            format!("\"{}\" --install-remote-printer", &src_exe),
-        )
-    } else {
-        ("".to_owned(), "".to_owned())
-    };
-
     // We do not try to remove all files in the old version.
     // Because I don't know whether additional files will be installed here after installation, such as drivers.
     // Just copy files to the installation directory works fine.
@@ -3598,8 +3336,6 @@ taskkill /F /IM {app_name}.exe{filter}
 {rename_exe}
 {remove_meta_toml}
 {restore_service_cmd}
-{uninstall_printer_cmd}
-{install_printer_cmd}
 {sleep}
     ",
         app_name = app_name,
@@ -4398,120 +4134,6 @@ pub mod reg_display_settings {
             _ => RegType::REG_NONE,
         }
     }
-}
-
-pub fn get_printer_names() -> ResultType<Vec<String>> {
-    let mut needed_bytes = 0;
-    let mut returned_count = 0;
-
-    unsafe {
-        // First call to get required buffer size
-        EnumPrintersW(
-            PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS,
-            std::ptr::null_mut(),
-            1,
-            std::ptr::null_mut(),
-            0,
-            &mut needed_bytes,
-            &mut returned_count,
-        );
-
-        let mut buffer = vec![0u8; needed_bytes as usize];
-
-        if EnumPrintersW(
-            PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS,
-            std::ptr::null_mut(),
-            1,
-            buffer.as_mut_ptr() as *mut _,
-            needed_bytes,
-            &mut needed_bytes,
-            &mut returned_count,
-        ) == 0
-        {
-            return Err(anyhow!("Failed to enumerate printers"));
-        }
-
-        let ptr = buffer.as_ptr() as *const PRINTER_INFO_1W;
-        let printers = std::slice::from_raw_parts(ptr, returned_count as usize);
-
-        Ok(printers
-            .iter()
-            .filter_map(|p| {
-                let name = p.pName;
-                if !name.is_null() {
-                    let mut len = 0;
-                    while len < 500 {
-                        if name.add(len).is_null() || *name.add(len) == 0 {
-                            break;
-                        }
-                        len += 1;
-                    }
-                    if len > 0 && len < 500 {
-                        Some(String::from_utf16_lossy(std::slice::from_raw_parts(
-                            name, len,
-                        )))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            })
-            .collect())
-    }
-}
-
-extern "C" {
-    fn PrintXPSRawData(printer_name: *const u16, raw_data: *const u8, data_size: c_ulong) -> DWORD;
-}
-
-pub fn send_raw_data_to_printer(printer_name: Option<String>, data: Vec<u8>) -> ResultType<()> {
-    let mut printer_name = printer_name.unwrap_or_default();
-    if printer_name.is_empty() {
-        // use GetDefaultPrinter to get the default printer name
-        let mut needed_bytes = 0;
-        unsafe {
-            GetDefaultPrinterW(std::ptr::null_mut(), &mut needed_bytes);
-        }
-        if needed_bytes > 0 {
-            let mut default_printer_name = vec![0u16; needed_bytes as usize];
-            unsafe {
-                GetDefaultPrinterW(
-                    default_printer_name.as_mut_ptr() as *mut _,
-                    &mut needed_bytes,
-                );
-            }
-            printer_name = String::from_utf16_lossy(&default_printer_name[..needed_bytes as usize]);
-        }
-    } else {
-        if let Ok(names) = crate::platform::windows::get_printer_names() {
-            if !names.contains(&printer_name) {
-                // Don't set the first printer as current printer.
-                // It may not be the desired printer.
-                bail!("Printer name \"{}\" not found", &printer_name);
-            }
-        }
-    }
-    if printer_name.is_empty() {
-        return Err(anyhow!("Failed to get printer name"));
-    }
-
-    log::info!("Sending data to printer: {}", &printer_name);
-    let printer_name = wide_string(&printer_name);
-    unsafe {
-        let res = PrintXPSRawData(
-            printer_name.as_ptr(),
-            data.as_ptr() as *const u8,
-            data.len() as c_ulong,
-        );
-        if res != 0 {
-            bail!("Failed to send data to the printer, see logs in C:\\Windows\\temp\\test_rustdesk.log for more details.");
-        } else {
-            log::info!("Successfully sent data to the printer");
-        }
-    }
-
-    Ok(())
 }
 
 fn get_pids<S: AsRef<str>>(name: S) -> ResultType<Vec<u32>> {

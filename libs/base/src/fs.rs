@@ -265,7 +265,6 @@ pub fn can_enable_overwrite_detection(version: i64) -> bool {
 #[derive(Copy, Clone, Serialize, Debug, PartialEq)]
 pub enum JobType {
     Generic = 0,
-    Printer = 1,
 }
 
 impl Default for JobType {
@@ -278,7 +277,6 @@ impl From<JobType> for file_transfer_send_request::FileType {
     fn from(t: JobType) -> Self {
         match t {
             JobType::Generic => file_transfer_send_request::FileType::Generic,
-            JobType::Printer => file_transfer_send_request::FileType::Printer,
         }
     }
 }
@@ -287,7 +285,6 @@ impl From<i32> for JobType {
     fn from(value: i32) -> Self {
         match value {
             0 => JobType::Generic,
-            1 => JobType::Printer,
             _ => JobType::Generic,
         }
     }
@@ -303,7 +300,9 @@ impl JobType {
     pub fn from_proto(t: ::protobuf::EnumOrUnknown<file_transfer_send_request::FileType>) -> Self {
         match t.enum_value() {
             Ok(file_transfer_send_request::FileType::Generic) => JobType::Generic,
-            Ok(file_transfer_send_request::FileType::Printer) => JobType::Printer,
+            // Remote printing was removed; a Printer-typed request from an old
+            // peer is treated as a generic file transfer.
+            Ok(file_transfer_send_request::FileType::Printer) => JobType::Generic,
             _ => JobType::Generic,
         }
     }
@@ -705,9 +704,6 @@ impl TransferJob {
     }
 
     pub fn modify_time(&self) {
-        if self.r#type == JobType::Printer {
-            return;
-        }
         if let DataSource::FilePath(p) = &self.data_source {
             let file_num = self.file_num as usize;
             if file_num < self.files.len() {
@@ -729,9 +725,6 @@ impl TransferJob {
     }
 
     pub fn remove_download_file(&self) {
-        if self.r#type == JobType::Printer {
-            return;
-        }
         if let DataSource::FilePath(p) = &self.data_source {
             let file_num = self.file_num as usize;
             if file_num < self.files.len() {
@@ -777,9 +770,7 @@ impl TransferJob {
                     }
                     self.file_num = block.file_num;
                     let entry = &self.files[file_num];
-                    let (path, digest_path) = if self.r#type == JobType::Printer {
-                        (p.to_string_lossy().to_string(), None)
-                    } else {
+                    let (path, digest_path) = {
                         let path = join_validated_path(p, &entry.name)?;
                         // NOTE: We intentionally keep path-based validation + regular file open here.
                         // This still has a known TOCTOU window for symlink races, but avoids a large
