@@ -42,7 +42,7 @@ use crate::{
 };
 
 pub const RENDEZVOUS_TIMEOUT: u64 = 12_000;
-pub const CONNECT_TIMEOUT: u64 = 18_000;
+pub const CONNECT_TIMEOUT: u64 = 6_000; // reduced from 18s: fail fast on unreachable peer addr, server latency is low
 pub const READ_TIMEOUT: u64 = 18_000;
 // https://github.com/quic-go/quic-go/issues/525#issuecomment-294531351
 // https://datatracker.ietf.org/doc/html/draft-hamilton-early-deployment-quic-00#section-6.10
