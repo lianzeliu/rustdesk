@@ -1508,7 +1508,7 @@ pub async fn change_id_shared_(id: String, _old_id: String) -> &'static str {
         log::debug!("invalid custom id: \"{id}\"");
         return INVALID_FORMAT;
     }
-    if id == get_id() {
+    if id == Config::get_id() {
         return "";
     }
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
