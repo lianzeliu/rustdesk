@@ -1000,9 +1000,11 @@ async fn handle(data: Data, stream: &mut Connection) {
                     if value.is_empty() {
                         log::warn!("Ignoring empty id write over IPC");
                         updated = false;
-                    } else {
+                    } else if value != Config::get_id() {
                         Config::set_key_confirmed(false);
                         Config::set_id(&value);
+                        // Re-register with the new ID immediately
+                        crate::rendezvous_mediator::RendezvousMediator::restart();
                     }
                 } else if name == "temporary-password" {
                     password::update_temporary_password();
