@@ -776,6 +776,7 @@ pub struct CheckIfRestart {
     disable_udp: String,
     allow_insecure_tls_fallback: String,
     api_server: String,
+    id: String,
 }
 
 impl CheckIfRestart {
@@ -791,6 +792,7 @@ impl CheckIfRestart {
                 keys::OPTION_ALLOW_INSECURE_TLS_FALLBACK,
             ),
             api_server: Config::get_option("api-server"),
+            id: Config::get_id(),
         }
     }
 }
@@ -807,6 +809,7 @@ impl Drop for CheckIfRestart {
             || self.ws != Config::get_option(OPTION_ALLOW_WEBSOCKET)
             || self.disable_udp != Config::get_option(keys::OPTION_DISABLE_UDP)
             || self.api_server != Config::get_option("api-server")
+            || self.id != Config::get_id()
         {
             if allow_insecure_tls_fallback_changed {
                 hbb_common::tls::reset_tls_cache();
