@@ -77,7 +77,7 @@ void changeIdDialog() {
   final RxString rxId = controller.text.trim().obs;
 
   final rules = [
-    RegexValidationRule('6-digit number', RegExp(r'^[0-9]{6}$')),
+    RegexValidationRule('6+ alphanumeric', RegExp(r'^[a-zA-Z0-9]{6,}$')),
   ];
 
   gFFI.dialogManager.show((setState, close, context) {
