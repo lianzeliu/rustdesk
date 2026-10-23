@@ -1499,66 +1499,34 @@ pub async fn change_id_shared(id: String, old_id: String) -> String {
     res
 }
 
-pub async fn change_id_shared_(id: String, old_id: String) -> &'static str {
-    if !hbb_common::is_valid_custom_id(&id) {
-        log::debug!(
-            "debugging invalid id: \"{id}\", len: {}, base64: \"{}\"",
-            id.len(),
-            crate::encode64(&id)
-        );
-        let bom = id.trim_start_matches('\u{FEFF}');
-        log::debug!("bom: {}", hbb_common::is_valid_custom_id(&bom));
+pub async fn change_id_shared_(id: String, _old_id: String) -> &'static str {
+    // Custom rewrite: allow 6-digit numeric IDs, bypass server check_id
+    // (server returns NOT_SUPPORT). Directly write to local config like
+    // the BAT-file method; takes effect after client restart.
+    let id = id.trim();
+    if id.len() != 6 || !id.chars().all(|c| c.is_ascii_digit()) {
+        log::debug!("invalid custom id: \"{id}\"");
         return INVALID_FORMAT;
     }
-
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let uuid = Bytes::from(
-        hbb_common::machine_uid::get()
-            .unwrap_or("".to_owned())
-            .as_bytes()
-            .to_vec(),
-    );
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    let uuid = Bytes::from(hbb_common::get_uuid());
-
-    if uuid.is_empty() {
-        log::error!("Failed to change id, uuid is_empty");
-        return UNKNOWN_ERROR;
+    if id == get_id() {
+        return "";
     }
-
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let rendezvous_servers = crate::ipc::get_rendezvous_servers(1_000).await;
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    let rendezvous_servers = Config::get_rendezvous_servers();
-
-    let mut futs = Vec::new();
-    let err: Arc<Mutex<&str>> = Default::default();
-    for rendezvous_server in rendezvous_servers {
-        let err = err.clone();
-        let id = id.to_owned();
-        let uuid = uuid.clone();
-        let old_id = old_id.clone();
-        futs.push(tokio::spawn(async move {
-            let tmp = check_id(rendezvous_server, old_id, id, uuid).await;
-            if !tmp.is_empty() {
-                *err.lock().unwrap() = tmp;
-            }
-        }));
-    }
-    join_all(futs).await;
-    let err = *err.lock().unwrap();
-    if err.is_empty() {
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        // Clear enc_id so the plain id is used on next start
+        crate::ipc::set_config_async("enc_id", "".to_owned()).await.ok();
         crate::ipc::set_config_async("id", id.to_owned()).await.ok();
-        #[cfg(any(target_os = "android", target_os = "ios"))]
-        {
-            Config::set_key_confirmed(false);
-            Config::set_id(&id);
-        }
     }
-    err
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        Config::set_key_confirmed(false);
+        Config::set_id(id);
+    }
+    log::info!("custom id set to {}, restart client to take effect", id);
+    ""
 }
 
+#[allow(dead_code)]
 async fn check_id(
     rendezvous_server: String,
     old_id: String,
