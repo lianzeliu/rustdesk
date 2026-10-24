@@ -1504,7 +1504,7 @@ pub async fn change_id_shared_(id: String, _old_id: String) -> &'static str {
     // (server returns NOT_SUPPORT). Directly write to local config like
     // the BAT-file method; takes effect after client restart.
     let id = id.trim();
-    if id.len() < 3 || !id.chars().all(|c| c.is_ascii_alphanumeric()) {
+    if id.len() < 1 || !id.chars().all(|c| c.is_ascii_alphanumeric()) {
         log::debug!("invalid custom id: \"{id}\"");
         return INVALID_FORMAT;
     }
