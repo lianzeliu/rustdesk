@@ -3733,6 +3733,15 @@ class QualityMonitorModel with ChangeNotifier {
   bool get show => _show;
   QualityMonitorData get data => _data;
 
+  // Connection type: direct or relay, for display in quality monitor.
+  String? get connectionType {
+    final ffiModel = parent.target?.ffiModel;
+    if (ffiModel == null) return null;
+    final d = ffiModel.direct;
+    if (d == null) return null;
+    return d ? 'Direct' : 'Relay';
+  }
+
   // Only a WebRTC session on the web names its transport here: web has no
   // session tab to show it on (the desktop tab's tooltip already does), and
   // WebRTC is the one path that can be direct or TURN.

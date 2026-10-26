@@ -2978,8 +2978,16 @@ impl LoginConfigHandler {
         // Three scopes: what was decided about this PEER, what this CLIENT is set up as (proxy),
         // and what its TRANSPORT forces (ws). Only the first may be written back to the peer's
         // config — persisting the others would make a local setup a permanent peer property.
+        // Optional prefer-relay: if user enables "prefer-relay" in LocalConfig,
+        // default to relay for all peers (unless peer explicitly sets force-always-relay to N).
+        // Default is off (prefer-relay not set = try direct first, as before).
+        let prefer_relay = config::option2bool(
+            keys::OPTION_PREFER_RELAY,
+            &Config::get_option(keys::OPTION_PREFER_RELAY),
+        );
         self.peer_relay =
             config::option2bool("force-always-relay", &self.get_option("force-always-relay"))
+                || (prefer_relay && self.get_option("force-always-relay") != "N")
                 || force_relay;
         self.policy_relay = self.peer_relay || Config::is_proxy();
         self.force_relay = self.policy_relay || use_ws();
