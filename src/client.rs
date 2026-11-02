@@ -974,7 +974,9 @@ impl Client {
             .unwrap_or_default();
         let mut webrtc_sdp_answer = String::new();
         let mut pending_webrtc_ice = Vec::<String>::new();
-        'punch_attempts: for i in 1..=3 {
+        // Single punch attempt only: 4s total, no retry. If direct fails in 4s, fail fast
+        // instead of retrying - the user prefers fast failure over slow retries.
+        'punch_attempts: for i in 1..=1 {
             log::info!(
                 "#{} {} punch attempt with {}, id: {}",
                 i,
@@ -984,7 +986,7 @@ impl Client {
             );
             socket.send(&msg_out).await?;
             // below timeout should not bigger than hbbs's connection timeout.
-            let attempt_deadline = Instant::now() + Duration::from_millis((i * 1000) as u64);
+            let attempt_deadline = Instant::now() + Duration::from_millis(4000);
             loop {
                 let remaining = attempt_deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
