@@ -557,6 +557,10 @@ impl Config2 {
         Ok(())
     }
 
+    pub fn get_trusted_devices_v2() -> crate::ResultType<String> {
+        Ok(String::new())
+    }
+
     pub fn has_trusted_devices_v2() -> crate::ResultType<bool> {
         Ok(false)
     }
@@ -1733,7 +1737,7 @@ impl PeerConfig {
         Ok(config.options.get("trusted-device-v2").cloned().unwrap_or_default())
     }
 
-    pub fn set_trusted_device_v2(id: &str, value: String, _info: impl std::fmt::Debug) -> crate::ResultType<()> {
+    pub fn set_trusted_device_v2(id: &str, value: String, _info: ()) -> crate::ResultType<()> {
         let mut config = Self::load(id);
         config.options.insert("trusted-device-v2".to_string(), value);
         config.store_(id);
