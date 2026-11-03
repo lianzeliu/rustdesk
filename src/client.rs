@@ -631,7 +631,7 @@ impl Client {
     /// whose race timeout is tuned for a raw TCP SYN. Long enough for candidate trickle + ICE
     /// checks + DTLS on high-latency links; short enough that UDP-blocked networks settle on
     /// relay without a noticeable wait. The same role RFC 8305 calls a connection attempt delay.
-    const RELAY_FALLBACK_DELAY_MS: u64 = 2500;
+    const RELAY_FALLBACK_DELAY_MS: u64 = 5000;
 
     /// The delay as the user configured it, falling back to `RELAY_FALLBACK_DELAY_MS`. The
     /// settings field holds seconds, which is what a user reasons about; everything here is
