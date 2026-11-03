@@ -545,6 +545,10 @@ impl Config2 {
         return CONFIG2.read().unwrap().clone();
     }
 
+    pub fn get_for_sync() -> Config2 {
+        Self::get()
+    }
+
     pub fn set(cfg: Config2) -> bool {
         let mut lock = CONFIG2.write().unwrap();
         if *lock == cfg {
@@ -1715,6 +1719,18 @@ impl Config {
 const PEERS: &str = "peers";
 
 impl PeerConfig {
+    pub fn get_trusted_device_v2(id: &str) -> ResultType<String> {
+        let config = Self::load(id);
+        Ok(config.options.get("trusted-device-v2").cloned().unwrap_or_default())
+    }
+
+    pub fn set_trusted_device_v2(id: &str, value: String, _info: String) -> ResultType<()> {
+        let mut config = Self::load(id);
+        config.options.insert("trusted-device-v2".to_string(), value);
+        config.store_(id);
+        Ok(())
+    }
+
     pub fn load(id: &str) -> PeerConfig {
         let _lock = CONFIG.read().unwrap();
         match confy::load_path(Self::path(id)) {
