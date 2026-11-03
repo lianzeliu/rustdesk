@@ -545,8 +545,24 @@ impl Config2 {
         return CONFIG2.read().unwrap().clone();
     }
 
-    pub fn get_for_sync() -> Config2 {
-        Self::get()
+    pub fn get_for_sync() -> crate::ResultType<Config2> {
+        Ok(Self::get())
+    }
+
+    pub fn get_trusted_device_stores() -> crate::ResultType<(String, String)> {
+        Ok((String::new(), String::new()))
+    }
+
+    pub fn set_trusted_devices_v2(_value: String) -> crate::ResultType<()> {
+        Ok(())
+    }
+
+    pub fn has_trusted_devices_v2() -> crate::ResultType<bool> {
+        Ok(false)
+    }
+
+    pub fn sync_trusted_devices(&self) -> crate::ResultType<()> {
+        Ok(())
     }
 
     pub fn set(cfg: Config2) -> bool {
@@ -1724,7 +1740,7 @@ impl PeerConfig {
         Ok(config.options.get("trusted-device-v2").cloned().unwrap_or_default())
     }
 
-    pub fn set_trusted_device_v2(id: &str, value: String, _info: String) -> crate::ResultType<()> {
+    pub fn set_trusted_device_v2(id: &str, value: String, _info: impl std::fmt::Debug) -> crate::ResultType<()> {
         let mut config = Self::load(id);
         config.options.insert("trusted-device-v2".to_string(), value);
         config.store_(id);
