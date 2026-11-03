@@ -1719,12 +1719,12 @@ impl Config {
 const PEERS: &str = "peers";
 
 impl PeerConfig {
-    pub fn get_trusted_device_v2(id: &str) -> ResultType<String> {
+    pub fn get_trusted_device_v2(id: &str) -> crate::ResultType<String> {
         let config = Self::load(id);
         Ok(config.options.get("trusted-device-v2").cloned().unwrap_or_default())
     }
 
-    pub fn set_trusted_device_v2(id: &str, value: String, _info: String) -> ResultType<()> {
+    pub fn set_trusted_device_v2(id: &str, value: String, _info: String) -> crate::ResultType<()> {
         let mut config = Self::load(id);
         config.options.insert("trusted-device-v2".to_string(), value);
         config.store_(id);
