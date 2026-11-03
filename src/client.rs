@@ -660,7 +660,7 @@ impl Client {
     /// waits. Sized as a ceiling on real-world rendezvous RTTs plus one 20ms retransmit
     /// (intercontinental ~300ms); paths slower than that lose UDP punch under a proxy, which
     /// is today's behavior, not a regression.
-    const UDP_NAT_TEST_GRACE: Duration = Duration::from_millis(100);
+    const UDP_NAT_TEST_GRACE: Duration = Duration::from_millis(400);
 
     /// Below this, the measured TCP connect time is not a believable WAN round trip — it was
     /// answered inside the LAN (host TUN proxy, gateway transparent proxy, or a genuinely local
