@@ -927,7 +927,8 @@ impl Client {
             .and_then(|g| g.stream())
             .map(|stream| stream.local_endpoint().to_owned())
             .unwrap_or_default();
-        let allow_tcp_punch = tcp_punch_allowed() && request_allows_tcp_punch(&webrtc_sdp_offer);
+        let allow_tcp_punch = (tcp_punch_allowed() || udp_nat_port == 0)
+            && request_allows_tcp_punch(&webrtc_sdp_offer);
         // Every direct transport this round carries, not one of them: a round can carry several
         // at once (a NAT port and an offer and a v6 address), and since the TCP punch became a
         // switch it can carry none — a single name had to misreport both. `relay` is not a punch,
@@ -945,13 +946,8 @@ impl Client {
         if !webrtc_sdp_offer.is_empty() {
             transports.push("WebRTC");
         }
-        // If no direct transports available (UDP test failed, TCP not allowed by config,
-        // IPv6/WebRTC disabled), try TCP punch as last resort instead of going straight
-        // to Relay. Without this, a failed UDP test with TCP disabled in config causes
-        // instant Relay with no direct attempt at all.
-        if transports.is_empty() {
-            transports.push("TCP");
-        }
+        // If UDP test failed (port=0), TCP is now allowed via allow_tcp_punch above,
+        // so transports will include TCP and punch will be attempted instead of instant Relay.
         let punch_type = if transports.is_empty() {
             "Relay".to_owned()
         } else {
