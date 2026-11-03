@@ -945,6 +945,13 @@ impl Client {
         if !webrtc_sdp_offer.is_empty() {
             transports.push("WebRTC");
         }
+        // If no direct transports available (UDP test failed, TCP not allowed by config,
+        // IPv6/WebRTC disabled), try TCP punch as last resort instead of going straight
+        // to Relay. Without this, a failed UDP test with TCP disabled in config causes
+        // instant Relay with no direct attempt at all.
+        if transports.is_empty() {
+            transports.push("TCP");
+        }
         let punch_type = if transports.is_empty() {
             "Relay".to_owned()
         } else {
