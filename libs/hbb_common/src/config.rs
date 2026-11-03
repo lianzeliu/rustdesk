@@ -951,14 +951,16 @@ impl Config {
         if rendezvous_server.is_empty() {
             rendezvous_server = PROD_RENDEZVOUS_SERVER.read().unwrap().clone();
         }
-        if rendezvous_server.is_empty() {
-            rendezvous_server = CONFIG2.read().unwrap().rendezvous_server.clone();
-        }
+        // Hardcoded RENDEZVOUS_SERVERS takes priority over CONFIG2 file value,
+        // so a stale config file cannot override the fork's custom server.
         if rendezvous_server.is_empty() {
             rendezvous_server = Self::get_rendezvous_servers()
                 .drain(..)
                 .next()
                 .unwrap_or_default();
+        }
+        if rendezvous_server.is_empty() {
+            rendezvous_server = CONFIG2.read().unwrap().rendezvous_server.clone();
         }
         if !rendezvous_server.contains(':') {
             rendezvous_server = format!("{rendezvous_server}:{RENDEZVOUS_PORT}");
@@ -979,17 +981,8 @@ impl Config {
         if !s.is_empty() {
             return vec![s];
         }
-        let serial_obsolute = CONFIG2.read().unwrap().serial > SERIAL;
-        if serial_obsolute {
-            let ss: Vec<String> = Self::get_option("rendezvous-servers")
-                .split(',')
-                .filter(|x| x.contains('.'))
-                .map(|x| x.to_owned())
-                .collect();
-            if !ss.is_empty() {
-                return ss;
-            }
-        }
+        // Hardcoded RENDEZVOUS_SERVERS takes priority over config file option,
+        // so the fork's custom server is used by default without manual setup.
         return RENDEZVOUS_SERVERS.iter().map(|x| x.to_string()).collect();
     }
 
