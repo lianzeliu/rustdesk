@@ -1336,14 +1336,16 @@ pub fn get_webrtc_enabled() -> bool {
 
 pub fn get_local_option(key: &str) -> String {
     let v = LocalConfig::get_option(key);
-    if key == keys::OPTION_ENABLE_UDP_PUNCH
-        || key == keys::OPTION_ENABLE_IPV6_PUNCH
-        || key == keys::OPTION_ENABLE_WEBRTC
-    {
-        if v.is_empty() {
-            if !is_public(&Config::get_rendezvous_server()) {
-                return "N".to_owned();
+    if v.is_empty() {
+        // The punch switches follow the fork's defaults, not the server's public or private
+        // nature: UDP is the fastest direct path when it works, TCP is the cheap backstop that
+        // needs no rendezvous cooperation, and IPv6/WebRTC stay off until they are asked for.
+        match key {
+            keys::OPTION_ENABLE_UDP_PUNCH | keys::OPTION_ENABLE_TCP_PUNCH => {
+                return "Y".to_owned()
             }
+            keys::OPTION_ENABLE_IPV6_PUNCH | keys::OPTION_ENABLE_WEBRTC => return "N".to_owned(),
+            _ => {}
         }
     }
     if key == "lang" && (v == "pt" || v == "br") {
