@@ -215,3 +215,23 @@ pub fn unframe_msg(data: &[u8]) -> Option<&[u8]> {
     }
     Some(&data[head_len..])
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn framed_datagrams_round_trip() {
+        for len in [0usize, 1, 63, 64, 0x3FFF, 0x4000, 0x3F_FFFF, 0x40_0000] {
+            let data: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+            let framed = frame_msg(&data);
+            assert_eq!(unframe_msg(&framed), Some(&data[..]), "len {len}");
+        }
+    }
+
+    #[test]
+    fn a_bare_datagram_is_not_mistaken_for_a_frame() {
+        let data = [0xAAu8, 0x01, 0x04, 0x08, 0xF8, 0xB2, 0x03];
+        assert_eq!(unframe_msg(&data), None);
+    }
+}

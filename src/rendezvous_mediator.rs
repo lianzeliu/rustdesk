@@ -1814,7 +1814,8 @@ mod tests {
             .await
             .expect("the reply must reach hbbs")
             .unwrap();
-        let sent = RendezvousMessage::parse_from_bytes(&buf[..n]).unwrap();
+        let sent = hbb_common::udp::unframe_msg(&buf[..n]).expect("the reply is framed for hbbs");
+        let sent = RendezvousMessage::parse_from_bytes(sent).unwrap();
         let sent = sent.punch_hole_sent();
         assert_eq!(sent.webrtc_sdp_answer, "answer");
         assert_eq!(&sent.socket_addr_v6[..], b"v6");
