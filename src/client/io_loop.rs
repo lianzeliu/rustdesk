@@ -1524,7 +1524,7 @@ impl<T: InvokeUiSession> Remote<T> {
     #[inline]
     async fn fps_control(
         &mut self,
-        direct: bool,
+        _direct: bool,
         real_fps_map: HashMap<usize, i32>,
         peer: &mut Stream,
     ) {
@@ -1559,14 +1559,11 @@ impl<T: InvokeUiSession> Remote<T> {
         let Some(min_decode_fps) = min_decode_fps else {
             return;
         };
-        let mut limited_fps = if direct {
-            min_decode_fps * 9 / 10 // 30 got 27
-        } else {
-            min_decode_fps * 4 / 5 // 30 got 24
-        };
-        if limited_fps > custom_fps {
-            limited_fps = custom_fps;
-        }
+        // The viewer's own limit is the ceiling; what decoding measured decides how far below it
+        // the automatic limit sits. A little headroom lets a stream capped at its own measured
+        // rate climb out of it instead of freezing there, and the flat 90%/80% haircut that held
+        // a 60 fps request at 54 - 48 over a relay - is gone.
+        let mut limited_fps = (min_decode_fps + 5).min(custom_fps);
         let last_auto_fps = self.last_auto_fps;
         let displays = self.video_threads.keys().cloned().collect::<Vec<_>>();
         let mut fps_trending = |display: usize| {
@@ -1597,8 +1594,10 @@ impl<T: InvokeUiSession> Remote<T> {
         let should_decrease = trendings.iter().any(|v| *v == Some(false));
         let should_increase = !should_decrease && trendings.iter().any(|v| *v == Some(true));
         if last_auto_fps.is_none() || should_decrease || should_increase {
-            // limited_fps to ensure decoding is faster than encoding
-            let mut auto_fps = limited_fps;
+            // The viewer's own limit stands while the queue is clear; only a real backlog trims
+            // it. Sending the measured decode rate here pinned the cap to the rate the stream
+            // already had, so a 60 fps request could never climb past where it started.
+            let mut auto_fps = if should_decrease { limited_fps } else { custom_fps };
             if should_decrease && limited_fps < max_queue_len {
                 auto_fps = limited_fps / 2;
             }
@@ -3103,7 +3102,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manual_fps_update_allows_the_same_automatic_limit_again() {
+    async fn manual_fps_survives_an_idle_automatic_adjustment() {
         let (mut remote, mut peer, mut far) = remote_and_peer().await;
         let (video_sender, _video_receiver) = std::sync::mpsc::channel();
         remote.video_threads.insert(
@@ -3118,7 +3117,7 @@ mod tests {
             },
         );
 
-        for (manual_fps, expected) in [(None, 20), (Some(90), 90), (None, 20)] {
+        for (manual_fps, expected) in [(None, 30), (Some(90), 90), (None, 90)] {
             if let Some(fps) = manual_fps {
                 let lc = &remote.handler.lc;
                 let msg = lc.write().unwrap().set_custom_fps(fps, false);

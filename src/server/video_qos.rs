@@ -466,13 +466,15 @@ impl VideoQoS {
         // bitrate-targeted encoders keep the bitrate, so the bitrate has to come down first.
         let bitrate_first = self.can_reduce_bitrate();
 
-        // For bad network, small fps means quick reaction and high quality
-        let (min_fps, normal_fps) = if target_ratio >= BR_BEST {
-            (8, 16)
+        // For bad network, small fps means quick reaction and high quality. This is the floor a
+        // congested link settles on; a clean sample climbs towards the viewer's own cap instead
+        // of stopping at a fixed per-quality rate, which held every session under 30 fps.
+        let min_fps = if target_ratio >= BR_BEST {
+            8
         } else if target_ratio >= BR_BALANCED {
-            (10, 20)
+            10
         } else {
-            (12, 24)
+            12
         };
 
         // Calculate minimum acceptable delay-fps product
@@ -502,7 +504,7 @@ impl VideoQoS {
             // Adaptive FPS adjustment based on network delay:
             if avg_delay < 50 {
                 user.delay.quick_increase_fps_count += 1;
-                let mut step = if fps < normal_fps { 1 } else { 0 };
+                let mut step = if fps < user_cap { 1 } else { 0 };
                 if user.delay.quick_increase_fps_count >= 3 {
                     // After 3 consecutive good samples, increase more aggressively
                     user.delay.quick_increase_fps_count = 0;
@@ -511,7 +513,7 @@ impl VideoQoS {
                 fps = min_fps.max(fps + step);
             } else if avg_delay < 100 {
                 let step = if avg_delay < old_avg_delay {
-                    if fps < normal_fps {
+                    if fps < user_cap {
                         1
                     } else {
                         0
