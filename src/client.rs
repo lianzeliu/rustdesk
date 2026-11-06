@@ -624,7 +624,7 @@ impl Client {
     /// Hard cap on the whole direct attempt, punch wait included: once this much time has passed
     /// without a direct transport, the relay is used. A direct connection that needs longer is
     /// not worth the wait, and the user asked for a bounded attempt rather than the best one.
-    const DIRECT_ATTEMPT_TIMEOUT_MS: u64 = 4000;
+    const DIRECT_ATTEMPT_TIMEOUT_MS: u64 = 2000;
 
     /// Frame rate a session runs at when the peer has no `custom-fps` option of its own.
     const DEFAULT_CUSTOM_FPS: i32 = 120;
@@ -633,7 +633,7 @@ impl Client {
     /// while a direct attempt is still in flight, and the floor for a punch-path WebRTC attempt
     /// whose race timeout is tuned for a raw TCP SYN. Bounded by `DIRECT_ATTEMPT_TIMEOUT_MS`,
     /// since a longer window would only hold a ready relay past the attempt cap.
-    const RELAY_FALLBACK_DELAY_MS: u64 = 4000;
+    const RELAY_FALLBACK_DELAY_MS: u64 = 2000;
 
     /// The delay as the user configured it, falling back to `RELAY_FALLBACK_DELAY_MS`. The
     /// settings field holds seconds, which is what a user reasons about; everything here is
@@ -1007,7 +1007,7 @@ impl Client {
             );
             socket.send(&msg_out).await?;
             // below timeout should not bigger than hbbs's connection timeout.
-            let attempt_deadline = Instant::now() + Duration::from_millis(4000);
+            let attempt_deadline = Instant::now() + Duration::from_millis(Self::DIRECT_ATTEMPT_TIMEOUT_MS);
             loop {
                 let remaining = attempt_deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
