@@ -1174,9 +1174,23 @@ impl RendezvousMediator {
             let mut msg_out = Message::new();
             msg_out.set_punch_hole_sent(msg_punch);
             let mut socket = connect_tcp(&*self.host, CONNECT_TIMEOUT).await?;
-            // The answer goes out only on a channel that is actually encrypted; otherwise this
-            // WebRTC attempt is abandoned and the controller falls back to its other transports.
-            crate::secure_tcp_required(&mut socket, &crate::get_key(true).await).await?;
+            // The answer goes out on a channel that is actually encrypted when there is a key to
+            // encrypt with; an unset or non-public key cannot encrypt anything, and dropping the
+            // answer there would leave the controller without a WebRTC path at all.
+            let key = crate::get_key(true).await;
+            if crate::get_rs_pk(&key).is_some() {
+                crate::secure_tcp_required(&mut socket, &key).await?;
+            } else {
+                log::warn!(
+                    "no usable rendezvous key ({}), WebRTC answer to {} is unencrypted",
+                    if key.is_empty() {
+                        "empty"
+                    } else {
+                        "not a public key"
+                    },
+                    self.host
+                );
+            }
             socket.send(&msg_out).await?;
             return Ok(());
         }

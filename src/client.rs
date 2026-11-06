@@ -871,19 +871,34 @@ impl Client {
             // machines, on this socket, so it goes out only once the server's key exchange has
             // encrypted it. When the server does not complete one, an hbbs from before the
             // exchange, the offer is dropped and this becomes a punch without WebRTC, on a fresh
-            // socket since the failed exchange may have consumed a message on this one. Degrade
-            // to no WebRTC, never to WebRTC signalling in the clear.
-            match secure_tcp_required(&mut socket, &key).await {
-                Ok(()) => exchanged = true,
-                Err(err) => {
-                    log::warn!(
-                        "WebRTC signalling to {} cannot be encrypted, punching without WebRTC: {}",
-                        rendezvous_server,
-                        err
-                    );
-                    webrtc_offerer = None;
-                    socket = connect_tcp(&*rendezvous_server, CONNECT_TIMEOUT).await?;
-                    my_addr = socket.local_addr();
+            // socket since the failed exchange may have consumed a message on this one.
+            //
+            // An unusable key is not that case: nothing can be encrypted with it, so the choice
+            // is unencrypted signalling or no WebRTC at all. The candidates only describe this
+            // host, and the only party that reads them here is the configured server.
+            if get_rs_pk(&key).is_none() {
+                log::warn!(
+                    "no usable rendezvous key ({}), WebRTC signalling to {} is unencrypted",
+                    if key.is_empty() {
+                        "empty"
+                    } else {
+                        "not a public key"
+                    },
+                    rendezvous_server
+                );
+            } else {
+                match secure_tcp_required(&mut socket, &key).await {
+                    Ok(()) => exchanged = true,
+                    Err(err) => {
+                        log::warn!(
+                            "WebRTC signalling to {} cannot be encrypted, punching without WebRTC: {}",
+                            rendezvous_server,
+                            err
+                        );
+                        webrtc_offerer = None;
+                        socket = connect_tcp(&*rendezvous_server, CONNECT_TIMEOUT).await?;
+                        my_addr = socket.local_addr();
+                    }
                 }
             }
         }
