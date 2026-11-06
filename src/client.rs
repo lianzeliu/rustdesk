@@ -552,13 +552,12 @@ impl Client {
             servers.clone(),
             contained,
         );
-        // The fallback request exists only to carry a TCP punch, so it is pointless once TCP
-        // punch is off — it would reach `connect()` with nothing to try and just open a second
-        // relay.
-        if interface.is_force_relay()
-            || (udp.0.is_none() && !has_webrtc_offerer)
-            || !tcp_punch_allowed()
-        {
+        // The fallback request exists to carry a TCP punch. It is deliberately not gated on the
+        // TCP punch switch: that switch decides the primary round only, and the primary round
+        // cannot carry a TCP punch while it holds a WebRTC offer. With UDP's NAT test failed
+        // there is nothing left in the primary round, so without this one UDP-blocked networks
+        // reach the relay without a single direct attempt.
+        if interface.is_force_relay() || (udp.0.is_none() && !has_webrtc_offerer) {
             return fut.await;
         }
         let preferred_fut = fut.boxed();
@@ -581,20 +580,16 @@ impl Client {
             contained,
         )
         .boxed();
-        if has_webrtc_offerer {
-            return race_transports_prefer_webrtc(
-                preferred_fut,
-                vec![fallback_fut],
-                Self::relay_fallback_delay_ms(),
-                |result| result.0 .1,
-            )
-            .await;
-        }
-        let connect_futures = vec![preferred_fut, fallback_fut];
-        match select_ok(connect_futures).await {
-            Ok(conn) => Ok((conn.0 .0, conn.0 .1, conn.0 .2)),
-            Err(e) => Err(e),
-        }
+        // Either round can return a relay before the other round's direct attempt lands, so
+        // prefer a direct result and hold a relay for the preference window instead of taking
+        // the first success. Both rounds bound their own attempts by DIRECT_ATTEMPT_TIMEOUT_MS.
+        race_transports_prefer_webrtc(
+            preferred_fut,
+            vec![fallback_fut],
+            Self::relay_fallback_delay_ms(),
+            |result| result.0 .1,
+        )
+        .await
     }
 
     fn is_expected_webrtc_ice_candidate(ice: &IceCandidate, session_key: &str) -> bool {
@@ -626,26 +621,31 @@ impl Client {
     /// ones that traverse NAT.
     const MAX_PENDING_WEBRTC_ICE: usize = 64;
 
+    /// Hard cap on the whole direct attempt, punch wait included: once this much time has passed
+    /// without a direct transport, the relay is used. A direct connection that needs longer is
+    /// not worth the wait, and the user asked for a bounded attempt rather than the best one.
+    const DIRECT_ATTEMPT_TIMEOUT_MS: u64 = 4000;
+
     /// Default relay fallback delay: how long an already-established relay result is held back
-    /// while a WebRTC attempt is still in flight, and the floor for a punch-path WebRTC attempt
-    /// whose race timeout is tuned for a raw TCP SYN. Long enough for candidate trickle + ICE
-    /// checks + DTLS on high-latency links; short enough that UDP-blocked networks settle on
-    /// relay without a noticeable wait. The same role RFC 8305 calls a connection attempt delay.
-    const RELAY_FALLBACK_DELAY_MS: u64 = 5000;
+    /// while a direct attempt is still in flight, and the floor for a punch-path WebRTC attempt
+    /// whose race timeout is tuned for a raw TCP SYN. Bounded by `DIRECT_ATTEMPT_TIMEOUT_MS`,
+    /// since a longer window would only hold a ready relay past the attempt cap.
+    const RELAY_FALLBACK_DELAY_MS: u64 = 4000;
 
     /// The delay as the user configured it, falling back to `RELAY_FALLBACK_DELAY_MS`. The
     /// settings field holds seconds, which is what a user reasons about; everything here is
     /// milliseconds. Unparseable, zero or negative all mean "unset", so clearing the field
     /// restores the default instead of collapsing the delay and handing every race to the
-    /// relay.
+    /// relay. Clamped to the attempt cap so the direct window can never outlast it.
     fn relay_fallback_delay_ms() -> u64 {
-        match LocalConfig::get_option(keys::OPTION_RELAY_FALLBACK_DELAY)
+        let ms = match LocalConfig::get_option(keys::OPTION_RELAY_FALLBACK_DELAY)
             .trim()
             .parse::<f64>()
         {
             Ok(secs) if secs.is_finite() && secs > 0.0 => (secs * 1000.0).round() as u64,
             _ => Self::RELAY_FALLBACK_DELAY_MS,
-        }
+        };
+        ms.clamp(100, Self::DIRECT_ATTEMPT_TIMEOUT_MS)
     }
 
     /// UDP-NAT-test wait when the TCP clock is implausible (see TCP_RTT_PLAUSIBLE_MIN). The
@@ -1521,22 +1521,43 @@ impl Client {
                 }
                 .boxed()
             });
+        // The direct attempt is bounded as a whole: `punch_time_used` is the time already spent
+        // waiting for the punch, so only what is left of DIRECT_ATTEMPT_TIMEOUT_MS belongs to
+        // this round. Whatever has not connected by then falls through to the relay below.
+        let remaining_ms = Self::DIRECT_ATTEMPT_TIMEOUT_MS
+            .saturating_sub(punch_time_used)
+            .clamp(200, Self::DIRECT_ATTEMPT_TIMEOUT_MS);
+        let window_ms = Self::relay_fallback_delay_ms().min(remaining_ms);
         // Prefer P2P: a direct result wins outright, a relayed WebRTC (TURN) is held for the
         // window so a direct punch can still land. Falls back to plain select_ok when only one
         // kind is present.
-        let direct_result = match (webrtc_fut, direct_futures.is_empty()) {
-            (Some(webrtc_fut), false) => {
-                race_transports_prefer_webrtc(
-                    webrtc_fut,
-                    direct_futures,
-                    Self::relay_fallback_delay_ms(),
-                    |r| r.3,
-                )
-                .await
+        let has_webrtc = webrtc_fut.is_some();
+        let direct_fut = async {
+            match (webrtc_fut, direct_futures.is_empty()) {
+                (Some(webrtc_fut), false) => {
+                    race_transports_prefer_webrtc(webrtc_fut, direct_futures, window_ms, |r| r.3)
+                        .await
+                }
+                (Some(webrtc_fut), true) => webrtc_fut.await,
+                (None, false) => select_ok(direct_futures).await.map(|c| c.0),
+                (None, true) => Err(anyhow!("No direct transport available")),
             }
-            (Some(webrtc_fut), true) => webrtc_fut.await,
-            (None, false) => select_ok(direct_futures).await.map(|c| c.0),
-            (None, true) => Err(anyhow!("No direct transport available")),
+        };
+        let direct_result = if interface.is_force_relay() && !has_webrtc {
+            // Nothing direct may win under a forced relay, so spending the budget on a punch
+            // whose result is discarded just below would only delay the relay.
+            Err(anyhow!("relay forced"))
+        } else {
+            match timeout(remaining_ms, direct_fut).await {
+                Ok(result) => result,
+                Err(_) => {
+                    log::warn!(
+                        "no direct connection within {}ms, falling back to relay",
+                        remaining_ms
+                    );
+                    Err(anyhow!("direct connection timed out"))
+                }
+            }
         };
         let (mut conn, kcp, mut typ, mut direct) = match direct_result {
             Ok((conn, kcp, typ, direct)) => (Ok(conn), kcp, typ, direct),

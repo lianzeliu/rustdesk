@@ -1099,9 +1099,16 @@ impl RendezvousMediator {
         // let ordinary relay traffic use the pool up. The v6 punch is not relayed with them - a
         // symmetric NAT on v4 says nothing about v6 - and its place is taken after the v4 one,
         // or it could be the last and leave the punch the peer counts on with none.
-        let relay_v4 = ph.nat_type.enum_value() == Ok(NatType::SYMMETRIC)
-            || Config::get_nat_type() == NatType::SYMMETRIC as i32
-            || relay
+        //
+        // The controller's nat_type is advisory, not decisive: hbbs rewrites it to SYMMETRIC
+        // when it judges a direct path hopeless (the two peers straddle its LAN, or
+        // ALWAYS_USE_RELAY), so honouring it here turns the controller's attempt into an
+        // instant relay it never asked for. Punch whatever it offered instead - a TCP
+        // simultaneous open still works from a symmetric NAT, unlike the UDP punch - and let
+        // its own bounded attempt fall back to relay if the punch does not land.
+        let self_symmetric = Config::get_nat_type() == NatType::SYMMETRIC as i32;
+        let relay_v4 = relay
+            || (self_symmetric && ph.udp_port > 0)
             || (config::is_disable_tcp_listen() && ph.udp_port <= 0);
         let punch_udp = !relay_v4 && ph.udp_port > 0;
         let punch_tcp = !relay_v4 && ph.udp_port <= 0 && ph.webrtc_sdp_offer.is_empty();
