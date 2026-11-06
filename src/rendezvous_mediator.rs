@@ -1224,7 +1224,9 @@ impl RendezvousMediator {
         let mut msg_out = Message::new();
         msg_out.set_punch_hole_sent(msg_punch);
         let (socket, addr) = new_direct_udp_for(&self.host).await?;
-        let data = msg_out.write_to_bytes()?;
+        // Framed like every other datagram hbbs decodes: an unframed `PunchHoleSent` is dropped
+        // unparsed, and the controller would never receive the response that opens its side.
+        let data = hbb_common::udp::frame_msg(&msg_out.write_to_bytes()?);
         socket.send_to(&data, addr).await?;
         // The reply is out, and with it the answer and the v6 address: declined is the listen
         // alone, and the socket goes at once - a declined request is not worth one kept for its

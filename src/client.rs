@@ -1033,7 +1033,11 @@ impl Client {
                             feedback = ph.feedback;
                             webrtc_sdp_answer = ph.webrtc_sdp_answer;
                             let s = udp.0.take();
-                            if udp_nat_port > 0 && ph.is_udp && s.is_some() {
+                            // No hbbs sets `is_udp` (neither 1.1.x nor the current server), so
+                            // gating on it left this socket unconnected and every UDP punch probe
+                            // failed with ENOTCONN. The mapping we advertised still exists: connect
+                            // it to the peer and let the probes decide.
+                            if udp_nat_port > 0 && s.is_some() {
                                 if let Some(s) = s {
                                     allow_err!(s.connect(peer_addr).await);
                                     udp.0 = Some(s);
@@ -5490,7 +5494,10 @@ async fn test_udp_uat(
     let mut packets_sent = 0;
 
     // Send initial burst to improve reliability
-    let data = msg_out.write_to_bytes()?;
+    // hbbs decodes its UDP with `BytesCodec`, so the request needs the frame header a
+    // `FramedSocket` would add: a bare protobuf datagram is never parsed, never answered, and
+    // the mapping this test exists to learn is never learned.
+    let data = hbb_common::udp::frame_msg(&msg_out.write_to_bytes()?);
     for _ in 0..2 {
         if let Err(e) = udp_socket.send_to(&data, server_addr).await {
             log::warn!("Failed to send initial UDP NAT test packet: {}", e);
@@ -5530,7 +5537,11 @@ async fn test_udp_uat(
             res = udp_socket.recv(&mut buf[..]) => {
                 match res {
                     Ok(n) => {
-                        match RendezvousMessage::parse_from_bytes(&buf[0..n]) {
+                        // Framed, as hbbs sends it; a bare reply is still accepted for a server
+                        // that answers raw.
+                        let payload =
+                            hbb_common::udp::unframe_msg(&buf[..n]).unwrap_or(&buf[..n]);
+                        match RendezvousMessage::parse_from_bytes(payload) {
                             Ok(msg_in) => {
                                 if let Some(rendezvous_message::Union::TestNatResponse(response)) = msg_in.union {
                                     *udp_port.lock().unwrap() = response.port as u16;

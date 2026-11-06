@@ -169,3 +169,49 @@ impl FramedSocket {
         None
     }
 }
+
+/// Adds the frame header `BytesCodec` writes, for the raw `UdpSocket` paths that talk to the
+/// rendezvous server directly - the UDP NAT test and the UDP `PunchHoleSent`. hbbs decodes its
+/// UDP with `BytesCodec`, so a bare protobuf datagram is never parsed and never answered, and
+/// the socket's mapping is never learned.
+pub fn frame_msg(data: &[u8]) -> Vec<u8> {
+    let n = data.len();
+    let mut out = Vec::with_capacity(n + 4);
+    if n <= 0x3F {
+        out.push((n << 2) as u8);
+    } else if n <= 0x3FFF {
+        out.extend_from_slice(&(((n << 2) as u16) | 0x1).to_le_bytes());
+    } else if n <= 0x3F_FFFF {
+        let h = (n << 2) as u32 | 0x2;
+        out.extend_from_slice(&(h as u16).to_le_bytes());
+        out.push((h >> 16) as u8);
+    } else {
+        out.extend_from_slice(&(((n << 2) as u32) | 0x3).to_le_bytes());
+    }
+    out.extend_from_slice(data);
+    out
+}
+
+/// The payload of a [`frame_msg`] datagram, or `None` when the header does not describe the
+/// whole datagram - which is also how a bare, unframed reply is told apart from a framed one.
+pub fn unframe_msg(data: &[u8]) -> Option<&[u8]> {
+    let first = *data.first()?;
+    let head_len = ((first & 0x3) + 1) as usize;
+    if data.len() < head_len {
+        return None;
+    }
+    let mut n = first as usize;
+    if head_len > 1 {
+        n |= (data[1] as usize) << 8;
+    }
+    if head_len > 2 {
+        n |= (data[2] as usize) << 16;
+    }
+    if head_len > 3 {
+        n |= (data[3] as usize) << 24;
+    }
+    if (n >> 2) != data.len() - head_len {
+        return None;
+    }
+    Some(&data[head_len..])
+}
