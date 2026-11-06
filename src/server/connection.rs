@@ -1734,7 +1734,9 @@ impl Connection {
                 );
                 bail!("{}", err);
             }
-            log::warn!(
+            // The final drop below reports the outcome; logging every retry of an unreachable
+            // endpoint only multiplied the noise by the attempt count.
+            log::debug!(
                 "Audit post failed (attempt {}/{}): {}",
                 attempt,
                 ATTEMPTS,

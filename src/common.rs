@@ -1401,9 +1401,10 @@ fn is_tcp_proxy_api_target(url: &str) -> bool {
 
 #[inline]
 fn should_throttle_log(url: &str) -> bool {
-    url::Url::parse(url)
-        .map(|parsed| parsed.path().ends_with("/api/heartbeat"))
-        .unwrap_or(false)
+    // Every api_log! site reports a repeated API failure - an endpoint that is down stays down
+    // and was logged on every attempt, which is how one unreachable audit server filled the log.
+    // Throttle all of them, not just the heartbeat.
+    url::Url::parse(url).is_ok()
 }
 
 macro_rules! api_log {
