@@ -3435,11 +3435,19 @@ impl LoginConfigHandler {
         }
         let q = self.image_quality.clone();
         let allow_more = !crate::using_public_server() || self.direct == Some(true);
-        if let Some(q) = self.get_image_quality_enum(&q, ignore_default) {
-            msg.image_quality = q.into();
-        } else if q == "custom" {
+        // The profile the UI falls back to - no stored choice, or the balanced preset - is the
+        // fork's default rather than the stock one: 120 fps at 100% quality. Sending the custom
+        // value here is what makes it that; the balanced enum itself would put the server back at
+        // a 0.67 bitrate ratio and no frame-rate request.
+        let default_profile = q.is_empty() || q == "balanced";
+        if !default_profile {
+            if let Some(q) = self.get_image_quality_enum(&q, ignore_default) {
+                msg.image_quality = q.into();
+            }
+        }
+        if default_profile || q == "custom" {
             let config = self.load_config();
-            let quality = if config.custom_image_quality.is_empty() {
+            let quality = if default_profile || config.custom_image_quality.is_empty() {
                 100
             } else {
                 let mut quality = config.custom_image_quality[0];
@@ -3455,11 +3463,14 @@ impl LoginConfigHandler {
         // default and made anything above that unreachable. 120 fps is the default the fork ships.
         #[cfg(feature = "flutter")]
         {
-            let mut custom_fps = self
-                .options
-                .get("custom-fps")
-                .and_then(|v| v.parse::<i32>().ok())
-                .unwrap_or(Client::DEFAULT_CUSTOM_FPS);
+            let mut custom_fps = if default_profile {
+                Client::DEFAULT_CUSTOM_FPS
+            } else {
+                self.options
+                    .get("custom-fps")
+                    .and_then(|v| v.parse::<i32>().ok())
+                    .unwrap_or(Client::DEFAULT_CUSTOM_FPS)
+            };
             if !allow_more && custom_fps > 30 {
                 custom_fps = 30;
             }
