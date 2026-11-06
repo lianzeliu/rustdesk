@@ -2007,7 +2007,7 @@ impl PeerConfig {
     fn default_custom_image_quality() -> Vec<i32> {
         let f: f64 = UserDefaultConfig::read(keys::OPTION_CUSTOM_IMAGE_QUALITY)
             .parse()
-            .unwrap_or(50.0);
+            .unwrap_or(100.0);
         vec![f as _]
     }
 

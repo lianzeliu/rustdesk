@@ -626,6 +626,9 @@ impl Client {
     /// not worth the wait, and the user asked for a bounded attempt rather than the best one.
     const DIRECT_ATTEMPT_TIMEOUT_MS: u64 = 4000;
 
+    /// Frame rate a session runs at when the peer has no `custom-fps` option of its own.
+    const DEFAULT_CUSTOM_FPS: i32 = 60;
+
     /// Default relay fallback delay: how long an already-established relay result is held back
     /// while a direct attempt is still in flight, and the floor for a punch-path WebRTC attempt
     /// whose race timeout is tuned for a raw TCP SYN. Bounded by `DIRECT_ATTEMPT_TIMEOUT_MS`,
@@ -1470,15 +1473,36 @@ impl Client {
         log::info!("peer address: {}, timeout: {}", peer, connect_timeout);
         let start = std::time::Instant::now();
 
+        // The direct attempt is bounded as a whole: `punch_time_used` is the time already spent
+        // waiting for the punch, so only what is left of DIRECT_ATTEMPT_TIMEOUT_MS belongs to
+        // this round. Whatever has not connected by then falls through to the relay below.
+        let remaining_ms = Self::DIRECT_ATTEMPT_TIMEOUT_MS
+            .saturating_sub(punch_time_used)
+            .clamp(200, Self::DIRECT_ATTEMPT_TIMEOUT_MS);
+
         // Each attempt carries whether its path is direct (4th field). TCP/UDP/IPv6 punch are
         // always direct; WebRTC is direct only when ICE nominated a non-TURN pair.
         let mut direct_futures = Vec::new();
         if allow_tcp_punch {
-            let fut = connect_tcp_local(peer, Some(local_addr), connect_timeout);
+            // The peer's punch listener only exists once its PunchHoleSent is out, and a SYN that
+            // arrives before that is reset at once - one attempt loses the punch to that race.
+            // Keep trying inside this round's budget; the source port is reused, so every
+            // attempt carries the same mapping the peer was told to dial.
+            let deadline = Instant::now() + Duration::from_millis(remaining_ms);
+            let attempt_timeout = connect_timeout.min(remaining_ms).max(300);
             direct_futures.push(
                 async move {
-                    let conn = fut.await?;
-                    Ok((conn, None, "TCP", true))
+                    loop {
+                        match connect_tcp_local(peer, Some(local_addr), attempt_timeout).await {
+                            Ok(conn) => return Ok((conn, None, "TCP", true)),
+                            Err(err) => {
+                                if Instant::now() >= deadline {
+                                    return Err(err);
+                                }
+                                hbb_common::sleep(0.1).await;
+                            }
+                        }
+                    }
                 }
                 .boxed(),
             );
@@ -1525,12 +1549,6 @@ impl Client {
                 }
                 .boxed()
             });
-        // The direct attempt is bounded as a whole: `punch_time_used` is the time already spent
-        // waiting for the punch, so only what is left of DIRECT_ATTEMPT_TIMEOUT_MS belongs to
-        // this round. Whatever has not connected by then falls through to the relay below.
-        let remaining_ms = Self::DIRECT_ATTEMPT_TIMEOUT_MS
-            .saturating_sub(punch_time_used)
-            .clamp(200, Self::DIRECT_ATTEMPT_TIMEOUT_MS);
         let window_ms = Self::relay_fallback_delay_ms().min(remaining_ms);
         // Prefer P2P: a direct result wins outright, a relayed WebRTC (TURN) is held for the
         // window so a direct punch can still land. Falls back to plain select_ok when only one
@@ -3407,7 +3425,7 @@ impl LoginConfigHandler {
         } else if q == "custom" {
             let config = self.load_config();
             let quality = if config.custom_image_quality.is_empty() {
-                50
+                100
             } else {
                 let mut quality = config.custom_image_quality[0];
                 if !allow_more && quality > 100 {
@@ -3419,10 +3437,14 @@ impl LoginConfigHandler {
         }
         // The frame rate is the viewer's setting, not part of the quality preset: sent only under
         // "custom" it never reached the server on any other preset, which stayed at the 30 fps
-        // default and made anything above that unreachable.
+        // default and made anything above that unreachable. 60 fps is the default the fork ships.
         #[cfg(feature = "flutter")]
-        if let Some(custom_fps) = self.options.get("custom-fps") {
-            let mut custom_fps = custom_fps.parse().unwrap_or(30);
+        {
+            let mut custom_fps = self
+                .options
+                .get("custom-fps")
+                .and_then(|v| v.parse::<i32>().ok())
+                .unwrap_or(Self::DEFAULT_CUSTOM_FPS);
             if !allow_more && custom_fps > 30 {
                 custom_fps = 30;
             }
