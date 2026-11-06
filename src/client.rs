@@ -3459,7 +3459,7 @@ impl LoginConfigHandler {
                 .options
                 .get("custom-fps")
                 .and_then(|v| v.parse::<i32>().ok())
-                .unwrap_or(Self::DEFAULT_CUSTOM_FPS);
+                .unwrap_or(Client::DEFAULT_CUSTOM_FPS);
             if !allow_more && custom_fps > 30 {
                 custom_fps = 30;
             }

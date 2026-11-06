@@ -1563,7 +1563,7 @@ impl<T: InvokeUiSession> Remote<T> {
         // the automatic limit sits. A little headroom lets a stream capped at its own measured
         // rate climb out of it instead of freezing there, and the flat 90%/80% haircut that held
         // a 60 fps request at 54 - 48 over a relay - is gone.
-        let mut limited_fps = (min_decode_fps + 5).min(custom_fps);
+        let limited_fps = (min_decode_fps + 5).min(custom_fps);
         let last_auto_fps = self.last_auto_fps;
         let displays = self.video_threads.keys().cloned().collect::<Vec<_>>();
         let mut fps_trending = |display: usize| {
