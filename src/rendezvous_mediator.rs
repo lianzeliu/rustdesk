@@ -1100,14 +1100,11 @@ impl RendezvousMediator {
         // symmetric NAT on v4 says nothing about v6 - and its place is taken after the v4 one,
         // or it could be the last and leave the punch the peer counts on with none.
         //
-        // A relay the server already decided on is final: ALWAYS_USE_RELAY (the LuCI
-        // "always relay" switch) and the two peers straddling the server's LAN both make it
-        // stamp SYMMETRIC here. Answering the punch anyway would only spend the controller's
-        // direct budget before it falls back to the same relay.
-        let relay_v4 = ph.nat_type.enum_value() == Ok(NatType::SYMMETRIC)
-            || Config::get_nat_type() == NatType::SYMMETRIC as i32
-            || relay
-            || (config::is_disable_tcp_listen() && ph.udp_port <= 0);
+        // Only a relay the server asked for explicitly is final. A nat_type of SYMMETRIC is
+        // what a symmetric NAT measures on its own as well, and a TCP simultaneous open still
+        // works from one, so that case is punched and the controller decides on its own
+        // whether to fall back.
+        let relay_v4 = relay || (config::is_disable_tcp_listen() && ph.udp_port <= 0);
         let punch_udp = !relay_v4 && ph.udp_port > 0;
         let punch_tcp = !relay_v4 && ph.udp_port <= 0 && ph.webrtc_sdp_offer.is_empty();
         let punch_v6 = peer_addr_v6.port() > 0 && !relay;
