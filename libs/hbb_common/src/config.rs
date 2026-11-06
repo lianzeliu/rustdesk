@@ -1986,7 +1986,16 @@ impl PeerConfig {
     serde_field_string!(
         default_image_quality,
         deserialize_image_quality,
-        UserDefaultConfig::read(keys::OPTION_IMAGE_QUALITY)
+        {
+            // A session with no stored quality runs the custom profile the fork ships: maximum
+            // frame rate and bitrate, instead of the balanced preset it used to fall back to.
+            let v = UserDefaultConfig::read(keys::OPTION_IMAGE_QUALITY);
+            if v.is_empty() {
+                "custom".to_owned()
+            } else {
+                v
+            }
+        }
     );
     serde_field_string!(
         default_reverse_mouse_wheel,
