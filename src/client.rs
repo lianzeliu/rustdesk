@@ -627,7 +627,7 @@ impl Client {
     const DIRECT_ATTEMPT_TIMEOUT_MS: u64 = 4000;
 
     /// Frame rate a session runs at when the peer has no `custom-fps` option of its own.
-    const DEFAULT_CUSTOM_FPS: i32 = 60;
+    const DEFAULT_CUSTOM_FPS: i32 = 120;
 
     /// Default relay fallback delay: how long an already-established relay result is held back
     /// while a direct attempt is still in flight, and the floor for a punch-path WebRTC attempt
@@ -3437,7 +3437,7 @@ impl LoginConfigHandler {
         }
         // The frame rate is the viewer's setting, not part of the quality preset: sent only under
         // "custom" it never reached the server on any other preset, which stayed at the 30 fps
-        // default and made anything above that unreachable. 60 fps is the default the fork ships.
+        // default and made anything above that unreachable. 120 fps is the default the fork ships.
         #[cfg(feature = "flutter")]
         {
             let mut custom_fps = self
