@@ -51,7 +51,7 @@ delay:
 pub const FPS: u32 = 30;
 pub const MIN_FPS: u32 = 1;
 pub const MAX_FPS: u32 = 120;
-pub const INIT_FPS: u32 = 15;
+pub const INIT_FPS: u32 = 30;
 const MIN_AUTO_FPS: u32 = 5;
 
 // Bitrate ratio constants for different quality levels
@@ -156,7 +156,7 @@ impl UserDelay {
     // Fresh low-delay replies permit recovery even while the average contains a spike:
     // a little at first, then back to the level held before congestion.
     fn recover(&mut self, current_fps: u32, fps: u32) -> u32 {
-        let gradual = current_fps + (current_fps / 10).max(1);
+        let gradual = current_fps + (current_fps / 4).max(2);
         let level = self
             .fps_before_congestion
             .filter(|level| *level > current_fps);
@@ -168,7 +168,7 @@ impl UserDelay {
             }
             (3, None) => {
                 self.fps_before_congestion = None;
-                fps.max(current_fps + (current_fps / 5).max(2))
+                fps.max(current_fps + (current_fps / 2).max(4))
             }
             _ => gradual,
         }
@@ -186,14 +186,14 @@ impl UserDelay {
             return fps;
         }
         let excess = delay.saturating_sub(self.rtt_calculator.get_rtt().unwrap_or_default());
-        // A low-load sample does not establish capacity: require two clean replies
-        // per step and abandon startup probing on the first sign of queue growth.
+        // Aggressive startup: one clean reply per step is enough to double,
+        // abandon startup probing on the first sign of queue growth.
         if braked || excess >= 50 || current_fps >= cap {
             self.startup_good_samples = u8::MAX;
             return fps;
         }
         self.startup_good_samples += 1;
-        if self.startup_good_samples < 2 {
+        if self.startup_good_samples < 1 {
             return fps;
         }
         self.startup_good_samples = 0;
