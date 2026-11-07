@@ -1245,6 +1245,13 @@ pub fn get_custom_rendezvous_server(custom: String) -> String {
     if !config::PROD_RENDEZVOUS_SERVER.read().unwrap().is_empty() {
         return config::PROD_RENDEZVOUS_SERVER.read().unwrap().clone();
     }
+    // Fork hardcodes RENDEZVOUS_SERVERS to the custom server; without this,
+    // using_public_server() wrongly returns true and caps FPS at 30 on relay.
+    if let Some(server) = config::RENDEZVOUS_SERVERS.first() {
+        if !server.is_empty() {
+            return server.to_string();
+        }
+    }
     "".to_owned()
 }
 

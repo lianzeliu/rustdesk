@@ -1580,7 +1580,10 @@ impl Client {
                 (None, true) => Err(anyhow!("No direct transport available")),
             }
         };
-        let direct_result = if interface.is_force_relay() && !has_webrtc {
+        let direct_result = if (interface.is_force_relay()
+            || peer_nat_type == NatType::SYMMETRIC)
+            && !has_webrtc
+        {
             // Nothing direct may win under a forced relay, so spending the budget on a punch
             // whose result is discarded just below would only delay the relay.
             Err(anyhow!("relay forced"))
@@ -3434,7 +3437,6 @@ impl LoginConfigHandler {
             }
         }
         let q = self.image_quality.clone();
-        let allow_more = !crate::using_public_server() || self.direct == Some(true);
         // The profile the UI falls back to - no stored choice, or the balanced preset - is the
         // fork's default rather than the stock one: 120 fps at 100% quality. Sending the custom
         // value here is what makes it that; the balanced enum itself would put the server back at
@@ -3457,9 +3459,6 @@ impl LoginConfigHandler {
                 if quality == 50 {
                     quality = 100;
                 }
-                if !allow_more && quality > 100 {
-                    quality = 50;
-                }
                 quality
             };
             msg.custom_image_quality = quality << 8;
@@ -3480,9 +3479,6 @@ impl LoginConfigHandler {
             // 30 was the pre-fork default for the same reason as the 50% above.
             if custom_fps == 30 {
                 custom_fps = Client::DEFAULT_CUSTOM_FPS;
-            }
-            if !allow_more && custom_fps > 30 {
-                custom_fps = 30;
             }
             msg.custom_fps = custom_fps;
             *self.custom_fps.lock().unwrap() = Some(custom_fps as _);
