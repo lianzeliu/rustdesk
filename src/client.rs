@@ -1612,8 +1612,13 @@ impl Client {
         // Keep a WebRTC win instead of replacing it with the RustDesk relay: under relay-by-
         // policy the pc was built with Relay-only ICE (TURN configured), which already honors
         // the relay requirement, and under ws-forced relay a direct full-ICE connection is the
-        // preferred outcome, not a violation.
-        if (interface.is_force_relay() && typ != "WebRTC") || conn.is_err() {
+        // preferred outcome, not a violation. But when the SERVER forces relay
+        // (peer_nat_type == SYMMETRIC), the WebRTC offer was built before the server
+        // responded, so it may carry P2P candidates; a direct WebRTC win must not
+        // stand in that case.
+        if ((interface.is_force_relay() || peer_nat_type == NatType::SYMMETRIC) && direct)
+            || conn.is_err()
+        {
             if !relay_server.is_empty() {
                 let switch_code = interface.get_switch_code();
                 conn = Self::request_relay(
