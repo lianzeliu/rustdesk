@@ -3644,10 +3644,18 @@ impl LoginConfigHandler {
         let mut res = None;
         if let Some(q) = self.get_image_quality_enum(&value, false) {
             let mut misc = Misc::new();
-            misc.set_option(OptionMessage {
+            let mut option = OptionMessage {
                 image_quality: q.into(),
                 ..Default::default()
-            });
+            };
+            // Switching back to balanced must also restore 120 fps: the server
+            // falls back to its 30 fps default for the Balanced preset unless
+            // custom_fps is sent along with the preset change.
+            if value.is_empty() || value == "balanced" {
+                option.custom_fps = Self::DEFAULT_CUSTOM_FPS;
+                *self.custom_fps.lock().unwrap() = Some(Self::DEFAULT_CUSTOM_FPS as _);
+            }
+            misc.set_option(option);
             let mut msg_out = Message::new();
             msg_out.set_misc(misc);
             res = Some(msg_out);
