@@ -3657,8 +3657,8 @@ impl LoginConfigHandler {
             // falls back to its 30 fps default for the Balanced preset unless
             // custom_fps is sent along with the preset change.
             if value.is_empty() || value == "balanced" {
-                option.custom_fps = Self::DEFAULT_CUSTOM_FPS;
-                *self.custom_fps.lock().unwrap() = Some(Self::DEFAULT_CUSTOM_FPS as _);
+                option.custom_fps = Client::DEFAULT_CUSTOM_FPS;
+                *self.custom_fps.lock().unwrap() = Some(Client::DEFAULT_CUSTOM_FPS as _);
             }
             misc.set_option(option);
             let mut msg_out = Message::new();
