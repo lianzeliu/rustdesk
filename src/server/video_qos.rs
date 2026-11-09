@@ -10,7 +10,7 @@ FPS adjust:
 a. new user connected => set to INIT_FPS
 b. TestDelay reply => update the user's fps from the excess delay, the reply's delay
    above the baseline this connection has shown so far:
-     startup: two consecutive replies with excess < 50 ms permit doubling toward
+     startup: one clean reply with excess < 50 ms permits doubling toward
        the viewer's cap; a higher excess or a brake ends this acceleration;
      excess < DELAY_THRESHOLD_150MS: a good reply; grows the fps, and after a
        reduction returns to the level held before it after two good replies;
@@ -192,11 +192,6 @@ impl UserDelay {
             self.startup_good_samples = u8::MAX;
             return fps;
         }
-        self.startup_good_samples += 1;
-        if self.startup_good_samples < 1 {
-            return fps;
-        }
-        self.startup_good_samples = 0;
         let accelerated = fps.max(current_fps.saturating_mul(2)).min(cap);
         if accelerated >= cap {
             self.startup_good_samples = u8::MAX;

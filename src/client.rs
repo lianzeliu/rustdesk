@@ -3457,14 +3457,7 @@ impl LoginConfigHandler {
             let quality = if default_profile || config.custom_image_quality.is_empty() {
                 100
             } else {
-                let mut quality = config.custom_image_quality[0];
-                // 50% was the pre-fork default and a peer that never touched the slider still
-                // carries it in its config; the fork ships 100%, so that stale value is not read
-                // as a choice.
-                if quality == 50 {
-                    quality = 100;
-                }
-                quality
+                config.custom_image_quality[0]
             };
             msg.custom_image_quality = quality << 8;
         }
@@ -3473,7 +3466,7 @@ impl LoginConfigHandler {
         // default and made anything above that unreachable. 120 fps is the default the fork ships.
         #[cfg(feature = "flutter")]
         {
-            let mut custom_fps = if default_profile {
+            let custom_fps = if default_profile {
                 Client::DEFAULT_CUSTOM_FPS
             } else {
                 self.options
@@ -3481,10 +3474,6 @@ impl LoginConfigHandler {
                     .and_then(|v| v.parse::<i32>().ok())
                     .unwrap_or(Client::DEFAULT_CUSTOM_FPS)
             };
-            // 30 was the pre-fork default for the same reason as the 50% above.
-            if custom_fps == 30 {
-                custom_fps = Client::DEFAULT_CUSTOM_FPS;
-            }
             msg.custom_fps = custom_fps;
             *self.custom_fps.lock().unwrap() = Some(custom_fps as _);
         }
