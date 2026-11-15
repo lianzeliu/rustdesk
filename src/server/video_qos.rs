@@ -10,7 +10,7 @@ FPS adjust:
 a. new user connected => set to INIT_FPS
 b. TestDelay reply => update the user's fps from the excess delay, the reply's delay
    above the baseline this connection has shown so far:
-     startup: one clean reply with excess < 50 ms permits doubling toward
+     startup: two consecutive replies with excess < 50 ms permit doubling toward
        the viewer's cap; a higher excess or a brake ends this acceleration;
      excess < DELAY_THRESHOLD_150MS: a good reply; grows the fps, and after a
        reduction returns to the level held before it after two good replies;
@@ -51,7 +51,7 @@ delay:
 pub const FPS: u32 = 30;
 pub const MIN_FPS: u32 = 1;
 pub const MAX_FPS: u32 = 120;
-pub const INIT_FPS: u32 = 30;
+pub const INIT_FPS: u32 = 15;
 const MIN_AUTO_FPS: u32 = 5;
 
 // Bitrate ratio constants for different quality levels
@@ -156,7 +156,7 @@ impl UserDelay {
     // Fresh low-delay replies permit recovery even while the average contains a spike:
     // a little at first, then back to the level held before congestion.
     fn recover(&mut self, current_fps: u32, fps: u32) -> u32 {
-        let gradual = current_fps + (current_fps / 4).max(2);
+        let gradual = current_fps + (current_fps / 10).max(1);
         let level = self
             .fps_before_congestion
             .filter(|level| *level > current_fps);
@@ -168,7 +168,7 @@ impl UserDelay {
             }
             (3, None) => {
                 self.fps_before_congestion = None;
-                fps.max(current_fps + (current_fps / 2).max(4))
+                fps.max(current_fps + (current_fps / 5).max(2))
             }
             _ => gradual,
         }
@@ -186,12 +186,17 @@ impl UserDelay {
             return fps;
         }
         let excess = delay.saturating_sub(self.rtt_calculator.get_rtt().unwrap_or_default());
-        // Aggressive startup: one clean reply per step is enough to double,
-        // abandon startup probing on the first sign of queue growth.
+        // A low-load sample does not establish capacity: require two clean replies
+        // per step and abandon startup probing on the first sign of queue growth.
         if braked || excess >= 50 || current_fps >= cap {
             self.startup_good_samples = u8::MAX;
             return fps;
         }
+        self.startup_good_samples += 1;
+        if self.startup_good_samples < 2 {
+            return fps;
+        }
+        self.startup_good_samples = 0;
         let accelerated = fps.max(current_fps.saturating_mul(2)).min(cap);
         if accelerated >= cap {
             self.startup_good_samples = u8::MAX;
