@@ -51,8 +51,8 @@ delay:
 pub const FPS: u32 = 30;
 pub const MIN_FPS: u32 = 1;
 pub const MAX_FPS: u32 = 120;
-pub const INIT_FPS: u32 = 15;
-const MIN_AUTO_FPS: u32 = 5;
+pub const INIT_FPS: u32 = 30;
+const MIN_AUTO_FPS: u32 = 30;
 
 // Bitrate ratio constants for different quality levels
 const BR_MAX: f32 = 40.0; // 2000 * 2 / 100
@@ -461,21 +461,13 @@ impl VideoQoS {
     }
 
     pub fn user_network_delay(&mut self, id: i32, delay: u32) {
-        let target_ratio = self.latest_quality().ratio();
         // Fewer frames only save bytes with encoders that size frames for a fixed rate;
         // bitrate-targeted encoders keep the bitrate, so the bitrate has to come down first.
         let bitrate_first = self.can_reduce_bitrate();
 
-        // For bad network, small fps means quick reaction and high quality. This is the floor a
-        // congested link settles on; a clean sample climbs towards the viewer's own cap instead
-        // of stopping at a fixed per-quality rate, which held every session under 30 fps.
-        let min_fps = if target_ratio >= BR_BEST {
-            8
-        } else if target_ratio >= BR_BALANCED {
-            10
-        } else {
-            12
-        };
+        // The frame rate never drops below 30: a congested link settles on 30 fps
+        // and answers congestion with a lower bitrate instead of fewer frames.
+        let min_fps = 30;
 
         // Calculate minimum acceptable delay-fps product
         let dividend_ms = DELAY_THRESHOLD_150MS * min_fps;
@@ -918,57 +910,45 @@ mod tests {
     }
 
     #[test]
-    fn response_timeout_recovers_in_two_good_replies() {
+    fn response_timeout_does_not_drop_below_floor() {
         let mut qos = stable_qos();
         qos.user_delay_response_elapsed(1, 3000);
-        assert_eq!(qos.fps(), 7);
+        assert_eq!(qos.fps(), FPS, "a stall stops at the 30 fps floor");
         qos.user_network_delay(1, 3200);
         assert_eq!(
             qos.fps(),
-            7,
+            FPS,
             "the late reply belongs to the stall that was braked"
         );
         qos.user_delay_response_elapsed(1, 0);
         qos.user_network_delay(1, 10);
-        assert_eq!(
-            qos.fps(),
-            8,
-            "one good reply must not restore the full frame rate"
-        );
+        assert_eq!(qos.fps(), FPS, "a good reply keeps the frame rate");
         qos.user_network_delay(1, 10);
-        assert_eq!(
-            qos.fps(),
-            FPS,
-            "the second good reply restores the frame rate"
-        );
+        assert_eq!(qos.fps(), FPS, "the second good reply keeps the frame rate");
         qos.user_network_delay(1, 10);
-        assert_eq!(qos.fps(), FPS, "the third keeps the restored frame rate");
+        assert_eq!(qos.fps(), FPS, "the third keeps the frame rate");
     }
 
     #[test]
-    fn restore_aims_lower_after_a_restore_that_congested() {
+    fn congestion_does_not_drop_below_floor() {
         let mut qos = stable_qos();
         for _ in 0..2 {
             qos.user_network_delay(1, 1200);
         }
-        assert_eq!(qos.fps(), 8);
+        assert_eq!(qos.fps(), FPS, "congestion stops at the 30 fps floor");
         qos.user_network_delay(1, 10);
         qos.user_network_delay(1, 10);
         assert_eq!(qos.fps(), FPS);
-        // The restored level congests at once, so the next restore aims lower.
+        // Congestion right after a restore still answers with bitrate, not fewer frames.
         for _ in 0..3 {
             qos.user_network_delay(1, 400);
         }
-        assert!(qos.fps() < FPS);
+        assert_eq!(qos.fps(), FPS, "the floor holds under repeated congestion");
         qos.user_network_delay(1, 10);
         qos.user_network_delay(1, 10);
-        assert!(
-            qos.fps() < FPS,
-            "no return to the level that failed: {}",
-            qos.fps()
-        );
+        assert_eq!(qos.fps(), FPS);
         qos.user_network_delay(1, 10);
-        assert_eq!(qos.fps(), FPS, "ordinary recovery can still reach the cap");
+        assert_eq!(qos.fps(), FPS);
     }
 
     mod adaptation;

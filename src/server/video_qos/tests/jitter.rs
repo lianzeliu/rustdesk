@@ -24,11 +24,11 @@ fn bitrate_reduction_precedes_ordinary_fps_reduction() {
     qos.user_network_delay(1, 400);
     assert_eq!(qos.fps(), FPS);
     qos.user_network_delay(1, 400);
-    assert!(qos.fps() < FPS);
+    assert_eq!(qos.fps(), FPS, "congestion answers with bitrate, not fewer frames");
 }
 
 #[test]
-fn unavailable_abr_or_minimum_bitrate_does_not_prevent_fps_reduction() {
+fn unavailable_abr_or_minimum_bitrate_keeps_fps_at_floor() {
     for mode in ["disabled", "unsupported", "minimum"] {
         let mut qos = abr_session();
         match mode {
@@ -40,7 +40,7 @@ fn unavailable_abr_or_minimum_bitrate_does_not_prevent_fps_reduction() {
         for _ in 0..3 {
             qos.user_network_delay(1, 400);
         }
-        assert!(qos.fps() < FPS, "{mode}");
+        assert_eq!(qos.fps(), FPS, "{mode}: the 30 fps floor holds without ABR");
     }
 }
 
@@ -49,9 +49,9 @@ fn severe_delay_and_timeout_bypass_bitrate_cooldown() {
     let mut qos = abr_session();
     qos.adjust_ratio_instant = qos.now();
     qos.user_network_delay(1, 1200);
-    assert_eq!(qos.fps(), 15);
+    assert_eq!(qos.fps(), FPS, "severe delay stops at the 30 fps floor");
     qos.user_delay_response_elapsed(1, 2500);
-    assert_eq!(qos.fps(), 7);
+    assert_eq!(qos.fps(), FPS, "a stall stops at the 30 fps floor");
 }
 
 #[test]
@@ -96,7 +96,7 @@ fn viewers_confirm_congestion_independently() {
     }
     qos.user_network_delay(2, 10);
     qos.user_network_delay(1, 400);
-    assert!(qos.fps() < FPS);
+    assert_eq!(qos.fps(), FPS, "viewer 1's congestion holds at the floor");
     qos.user_custom_fps(2, 12);
     qos.user_network_delay(1, 10);
     assert_eq!(qos.fps(), 12);
@@ -111,11 +111,11 @@ fn a_congested_viewer_does_not_lower_another_viewers_target() {
         qos.user_network_delay(1, 10);
     }
     assert_eq!(qos.fps(), FPS);
-    // Viewer 1 congests; the stream follows the slowest viewer.
+    // Viewer 1 congests; the stream holds at the floor.
     for _ in 0..2 {
         qos.user_network_delay(1, 1200);
     }
-    assert_eq!(qos.fps(), 8);
+    assert_eq!(qos.fps(), FPS, "congestion stops at the 30 fps floor");
     // Viewer 2 is fine and keeps its own target rather than inheriting viewer 1's.
     qos.user_network_delay(2, 10);
     assert_eq!(qos.users[&2].delay.fps, Some(FPS));

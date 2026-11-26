@@ -1,23 +1,18 @@
 use super::*;
 
 #[test]
-fn ordinary_congestion_waits_between_bounded_cuts() {
+fn ordinary_congestion_holds_the_floor() {
     for delay in [400, 800] {
         let mut qos = stable_qos();
         for _ in 0..2 {
             qos.user_network_delay(1, delay);
             assert_eq!(qos.fps(), FPS);
         }
-        qos.user_network_delay(1, delay);
-        let first_cut = qos.fps();
-        assert!((24..FPS).contains(&first_cut), "delay={delay}: {first_cut}");
-        for _ in 0..2 {
+        // Repeated congestion answers with bitrate, not fewer frames.
+        for _ in 0..4 {
             qos.user_network_delay(1, delay);
-            assert_eq!(qos.fps(), first_cut, "wait for new evidence after a cut");
+            assert_eq!(qos.fps(), FPS, "delay={delay}");
         }
-        qos.user_network_delay(1, delay);
-        assert!(qos.fps() < first_cut);
-        assert!(qos.fps() >= first_cut - first_cut / 5);
     }
 }
 
@@ -36,7 +31,7 @@ fn automatic_floor_preserves_lower_custom_limits() {
                 assert_eq!(qos.fps(), limit);
                 qos.ratio = BR_MIN_HIGH_RESOLUTION;
                 qos.store_bitrate(600);
-                let floor = 5.min(limit);
+                let floor = 30.min(limit);
                 if timeout {
                     for elapsed in [2001, 3001, 4001, 5001, 10_000, 30_000] {
                         qos.user_delay_response_elapsed(1, elapsed);
